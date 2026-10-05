@@ -2,8 +2,16 @@
   "name": "faultguard",
   "version": "1.0.0",
   "description": "A framework-agnostic, OpenAPI-compliant custom error handling package for TypeScript backends.",
-  "author": "Your Name",
+  "author": "Sahil Sharma <sahilsharma3043@gmail.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sahil-coder-30/faultguard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Sahil-coder-30/faultguard/issues"
+  },
+  "homepage": "https://github.com/Sahil-coder-30/faultguard#readme",
   "keywords": [
     "error-handler",
     "typescript",
@@ -68,7 +76,7 @@
     "test:stress:logger": "node tests/stress_logger_standalone.test.js",
     "test:stress:handler": "node tests/stress_errorhandler_standalone.test.js",
     "test:stress:combined": "node tests/stress_combined_e2e.test.js",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build && npm test"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
