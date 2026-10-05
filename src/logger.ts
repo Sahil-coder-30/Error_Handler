@@ -72,33 +72,73 @@ export type FaultGuardLoggerOptions = FaultKitLoggerOptions;
  */
 export const DEFAULT_REDACT_KEYS = [
   "req.headers.authorization",
+  "req.headers.Authorization",
   "req.headers.cookie",
   "headers.authorization",
+  "headers.Authorization",
   "headers.cookie",
   "authorization",
+  "Authorization",
   "cookie",
+  "Cookie",
   "password",
+  "Password",
+  "PASSWORD",
   "token",
+  "Token",
+  "TOKEN",
+  "accessToken",
+  "access_token",
+  "refreshToken",
+  "refresh_token",
   "secret",
+  "Secret",
   "apiKey",
+  "api_key",
   "creditCard",
   "*.password",
+  "*.Password",
+  "*.PASSWORD",
   "*.token",
+  "*.accessToken",
+  "*.access_token",
+  "*.refreshToken",
+  "*.refresh_token",
   "*.secret",
   "*.apiKey",
+  "*.api_key",
   "*.creditCard",
   "*.authorization",
+  "*.Authorization",
   "*.cookie",
   "*[*].password",
+  "*[*].Password",
+  "*[*].PASSWORD",
   "*[*].token",
+  "*[*].accessToken",
+  "*[*].access_token",
+  "*[*].refreshToken",
+  "*[*].refresh_token",
   "*[*].secret",
   "*[*].apiKey",
+  "*[*].api_key",
   "*[*].creditCard",
+  "*[*].authorization",
+  "*[*].Authorization",
   "*.*.password",
+  "*.*.Password",
+  "*.*.PASSWORD",
   "*.*.token",
+  "*.*.accessToken",
+  "*.*.access_token",
+  "*.*.refreshToken",
+  "*.*.refresh_token",
   "*.*.secret",
   "*.*.apiKey",
+  "*.*.api_key",
   "*.*.creditCard",
+  "*.*.authorization",
+  "*.*.Authorization",
 ];
 
 /**
@@ -219,8 +259,31 @@ function wrapSafeLogger(instance: Logger): Logger {
 
   const origChild = target.child;
   target.child = function safeChild(this: any, ...args: unknown[]) {
-    const childInstance = origChild.apply(this, args);
-    return wrapSafeLogger(childInstance);
+    try {
+      const childInstance = origChild.apply(this, args);
+      return wrapSafeLogger(childInstance);
+    } catch {
+      try {
+        const safeArgs = args.map((a) => {
+          if (typeof a === "object" && a !== null) {
+            const clean: Record<string, unknown> = {};
+            for (const [k] of Object.entries(a)) {
+              try {
+                clean[k] = (a as any)[k];
+              } catch {
+                clean[k] = "[Unreadable Property]";
+              }
+            }
+            return clean;
+          }
+          return a;
+        });
+        const childInstance = origChild.apply(this, safeArgs);
+        return wrapSafeLogger(childInstance);
+      } catch {
+        return instance;
+      }
+    }
   };
 
   return instance;

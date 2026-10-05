@@ -200,7 +200,13 @@ function runInit(args) {
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === "--target" && args[i + 1]) {
+    if (arg.startsWith("--target=")) {
+      target = arg.slice("--target=".length).toLowerCase();
+    } else if (arg === "--target") {
+      if (!args[i + 1] || args[i + 1].startsWith("-")) {
+        console.error("Error: --target requires a value.");
+        return 1;
+      }
       target = args[++i].toLowerCase();
     } else if (arg === "-f" || arg === "--force") {
       force = true;
@@ -210,6 +216,12 @@ function runInit(args) {
       printHelp();
       return 0;
     }
+  }
+
+  const validTargets = new Set(["auto", "all", "agents", "antigravity", "cursor", "copilot", "claude"]);
+  if (!validTargets.has(target)) {
+    console.error(`Error: Invalid target '${target}'. Allowed values: agents, antigravity, cursor, copilot, claude, all, auto.`);
+    return 1;
   }
 
   console.log(`\n🛡️  Initializing FaultKit AI-Agent Integration...`);

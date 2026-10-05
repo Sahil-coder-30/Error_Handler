@@ -79,6 +79,7 @@
     "test:stress:logger": "node tests/stress_logger_standalone.test.js",
     "test:stress:handler": "node tests/stress_errorhandler_standalone.test.js",
     "test:stress:combined": "node tests/stress_combined_e2e.test.js",
+    "test:adversarial": "node tests/adversarial/runner.js",
     "prepublishOnly": "npm run build && npm test"
   },
   "devDependencies": {
@@ -99,7 +100,6 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "faultkit": "^1.0.0",
     "pino": "^10.4.0"
   }
 }

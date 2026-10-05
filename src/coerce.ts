@@ -41,6 +41,12 @@ export function coerceToAppError(err: unknown, customCoercer?: ErrorCoercer): Ap
 
   // ── 1. Happy Path: Already an AppError ────────────────────────────────────
   if (err instanceof AppError) {
+    if (typeof err.statusCode === "number" && (err.statusCode < 400 || err.statusCode > 599)) {
+      return new InternalServerError(err.message, err.details);
+    }
+    if (typeof err.statusCode === "number" && !Number.isInteger(err.statusCode)) {
+      (err as any).statusCode = Math.floor(err.statusCode);
+    }
     return err;
   }
 
@@ -79,17 +85,23 @@ export function coerceToAppError(err: unknown, customCoercer?: ErrorCoercer): Ap
         }
       }
 
-      // ── 2b. MongoDB / Mongoose Duplicate Key Error (Code 11000) ────────────
+      // ── 2b. MongoDB / Mongoose Duplicate Key Error (Code 11000 / 11001) ─────
       let errCode: unknown;
       try { errCode = anyErr.code; } catch { /* getter trap */ }
 
-      if (errCode === 11000 || errCode === "11000" || errName === "MongoServerError") {
+      const isDuplicateKey =
+        errCode === 11000 ||
+        errCode === "11000" ||
+        errCode === 11001 ||
+        errCode === "11001";
+
+      if (isDuplicateKey) {
         let keyPattern: Record<string, unknown> | undefined;
         try {
           keyPattern = (anyErr.keyValue || anyErr.keyPattern) as Record<string, unknown> | undefined;
         } catch { /* getter trap */ }
 
-        const fieldNames = keyPattern && typeof keyPattern === "object"
+        const fieldNames = keyPattern && typeof keyPattern === "object" && !Array.isArray(keyPattern)
           ? Object.keys(keyPattern).join(", ")
           : "record";
 

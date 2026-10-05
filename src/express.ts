@@ -21,6 +21,7 @@ import { AppError } from "./AppError.js";
 import { ErrorCode, type ErrorResponse, type ErrorCoercer } from "./types.js";
 import { logger as defaultLogger } from "./logger.js";
 import { coerceToAppError } from "./coerce.js";
+import { sanitizeDetails } from "./format.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Options
@@ -124,7 +125,7 @@ export function createExpressErrorHandler(
     next: NextFunction
   ): void {
     // ── Express Safeguard: If headers were already sent, delegate to default handler
-    if (res.headersSent) {
+    if (res.headersSent || res.writableEnded) {
       return next(err);
     }
 
@@ -136,26 +137,29 @@ export function createExpressErrorHandler(
     if (includeRequestId) {
       if (typeof getRequestId === "function") {
         try {
-          requestId = getRequestId(req);
+          const customId = getRequestId(req);
+          if (typeof customId === "string" && customId.trim().length > 0) {
+            requestId = customId.trim();
+          }
         } catch {
           // ignore extractor errors
         }
       }
       if (!requestId && req) {
         const anyReq = req as unknown as Record<string, unknown>;
-        requestId =
-          (typeof anyReq.id === "string" ? anyReq.id : undefined) ||
-          (typeof anyReq.requestId === "string" ? anyReq.requestId : undefined) ||
-          (typeof anyReq.correlationId === "string" ? anyReq.correlationId : undefined);
+        const rawId = anyReq.id || anyReq.requestId || anyReq.correlationId;
+        if (typeof rawId === "string" && rawId.trim().length > 0) {
+          requestId = rawId.trim();
+        }
 
         if (!requestId && req.headers) {
           const headerVal =
             req.headers[requestIdHeader.toLowerCase()] ||
             req.headers["x-correlation-id"];
-          if (typeof headerVal === "string") {
-            requestId = headerVal;
-          } else if (Array.isArray(headerVal) && headerVal[0]) {
-            requestId = headerVal[0];
+          if (typeof headerVal === "string" && headerVal.trim().length > 0) {
+            requestId = headerVal.trim();
+          } else if (Array.isArray(headerVal) && typeof headerVal[0] === "string" && headerVal[0].trim().length > 0) {
+            requestId = headerVal[0].trim();
           }
         }
       }
@@ -210,6 +214,18 @@ export function createExpressErrorHandler(
     const isProduction = process.env.NODE_ENV === "production";
 
     /**
+     * Clamp status codes to valid HTTP error range (400-599).
+     * Any status code outside this range (e.g. 200 OK or > 599) is coerced to 500.
+     */
+    let safeStatusCode = 500;
+    if (typeof appError.statusCode === "number" && !isNaN(appError.statusCode)) {
+      const rounded = Math.floor(appError.statusCode);
+      if (rounded >= 400 && rounded <= 599) {
+        safeStatusCode = rounded;
+      }
+    }
+
+    /**
      * For non-operational errors in production, hide the real message to
      * prevent leaking implementation details. In development, show it.
      */
@@ -218,18 +234,38 @@ export function createExpressErrorHandler(
         ? appError.message
         : genericServerErrorMessage;
 
+    const rawDetails = appError.isOperational ? appError.details : null;
+    const clientDetails = rawDetails !== null && rawDetails !== undefined ? sanitizeDetails(rawDetails) : null;
+
     const responseBody: ErrorResponse = {
       success: false,
       error: {
         code: appError.errorCode,
         message: clientMessage,
-        details: appError.isOperational ? appError.details : null,
+        details: clientDetails,
         ...(requestId ? { requestId } : {}),
       },
       ...(requestId ? { requestId } : {}),
     };
 
     // ── Step 5: Send the response ────────────────────────────────────────────
-    res.status(appError.statusCode).json(responseBody);
+    try {
+      res.status(safeStatusCode).json(responseBody);
+    } catch {
+      try {
+        res.status(safeStatusCode).json({
+          success: false,
+          error: {
+            code: appError.errorCode,
+            message: clientMessage,
+            details: null,
+            ...(requestId ? { requestId } : {}),
+          },
+          ...(requestId ? { requestId } : {}),
+        });
+      } catch {
+        next(appError);
+      }
+    }
   };
 }

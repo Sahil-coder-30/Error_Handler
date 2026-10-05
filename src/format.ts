@@ -5,6 +5,7 @@
  * WebSockets (Socket.io), Message Queues (RabbitMQ, BullMQ, Kafka), gRPC, and Lambdas.
  */
 
+import { AppError } from "./AppError.js";
 import { coerceToAppError } from "./coerce.js";
 import type { ErrorResponse, ErrorCoercer } from "./types.js";
 
@@ -35,6 +36,36 @@ export interface FormatErrorOptions {
 
 const DEFAULT_GENERIC_MESSAGE =
   "An unexpected error occurred. Our team has been notified.";
+
+/**
+ * Recursively sanitizes details payloads to safely serialize BigInt values (converted to strings)
+ * and break circular reference graphs before JSON serialization.
+ */
+export function sanitizeDetails(details: unknown): unknown {
+  if (details === null || details === undefined) return null;
+  if (typeof details === "bigint") return details.toString();
+  if (typeof details !== "object") return details;
+
+  try {
+    const seen = new WeakSet();
+    return JSON.parse(
+      JSON.stringify(details, (_key, value) => {
+        if (typeof value === "bigint") {
+          return value.toString();
+        }
+        if (typeof value === "object" && value !== null) {
+          if (seen.has(value)) {
+            return "[Circular]";
+          }
+          seen.add(value);
+        }
+        return value;
+      })
+    );
+  } catch {
+    return "[Unserializable Details]";
+  }
+}
 
 /**
  * Converts any thrown value or Error into a guaranteed OpenAPI-compliant `ErrorResponse` envelope.
@@ -71,7 +102,8 @@ export function toErrorResponse(
 
   const shouldMask = isProduction && !appError.isOperational;
   const message = shouldMask ? genericServerErrorMessage : appError.message;
-  const details = shouldMask ? null : (appError.details ?? null);
+  const rawDetails = shouldMask ? null : (appError.details ?? null);
+  const details = rawDetails !== null && rawDetails !== undefined ? sanitizeDetails(rawDetails) : null;
 
   const response: ErrorResponse = {
     success: false,
@@ -91,3 +123,6 @@ export function toErrorResponse(
  * Functional alias for `toErrorResponse`.
  */
 export const formatError = toErrorResponse;
+
+// Register full formatter on AppError static dispatch (for ESM and non-HTTP callers)
+AppError._registerFormatter(toErrorResponse);

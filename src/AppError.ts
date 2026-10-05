@@ -83,6 +83,16 @@ export abstract class AppError extends Error {
     };
   }
 
+  private static _formatter?: (err: unknown, options?: any) => import("./types.js").ErrorResponse;
+
+  /**
+   * Internal hook used by format.ts to register the full OpenAPI formatter
+   * without creating module-evaluation circular dependencies in ESM.
+   */
+  public static _registerFormatter(fn: (err: unknown, options?: any) => import("./types.js").ErrorResponse) {
+    AppError._formatter = fn;
+  }
+
   /**
    * Static helper to format any error (AppError, native Error, Mongoose, or unknown)
    * into a standardized OpenAPI ErrorResponse for non-HTTP environments (WebSockets, RabbitMQ, etc.).
@@ -90,10 +100,38 @@ export abstract class AppError extends Error {
   public static format(
     err: unknown,
     options?: import("./format.js").FormatErrorOptions
-  ) {
-    // Dynamic import style to avoid circular module dependency at initialization
-    const { toErrorResponse } = require("./format.js");
-    return toErrorResponse(err, options);
+  ): import("./types.js").ErrorResponse {
+    if (AppError._formatter) {
+      return AppError._formatter(err, options);
+    }
+
+    // Try CommonJS require if available in environment
+    if (typeof require === "function") {
+      try {
+        const { toErrorResponse } = require("./format.js");
+        return toErrorResponse(err, options);
+      } catch {
+        // continue to fallback
+      }
+    }
+
+    // Safe zero-dependency fallback if format.js has not registered
+    const isApp = err instanceof AppError;
+    const code = isApp ? err.errorCode : ErrorCode.INTERNAL_SERVER_ERROR;
+    const msg = isApp ? err.message : "An unexpected error occurred.";
+    const details = isApp ? (err.details ?? null) : null;
+    const reqId = options?.requestId;
+
+    return {
+      success: false as const,
+      error: {
+        code,
+        message: msg,
+        details,
+        ...(reqId ? { requestId: reqId } : {}),
+      },
+      ...(reqId ? { requestId: reqId } : {}),
+    };
   }
 
   /**
@@ -102,7 +140,7 @@ export abstract class AppError extends Error {
   public static toResponse(
     err: unknown,
     options?: import("./format.js").FormatErrorOptions
-  ) {
+  ): import("./types.js").ErrorResponse {
     return AppError.format(err, options);
   }
 }
