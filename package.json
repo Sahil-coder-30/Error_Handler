@@ -1,5 +1,5 @@
 {
-  "name": "faultguard",
+  "name": "@sahilsharma30/faultguard",
   "version": "1.0.0",
   "description": "A framework-agnostic, OpenAPI-compliant custom error handling package for TypeScript backends.",
   "author": "Sahil Sharma <sahilsharma3043@gmail.com>",

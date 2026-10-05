@@ -39,7 +39,7 @@ Most error handling libraries either couple you tightly to a specific web framew
 ## 3. Installation
 
 ```bash
-npm install faultguard
+npm install @sahilsharma30/faultguard
 ```
 
 ### Optional Peer Dependency: Express
