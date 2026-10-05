@@ -1,6 +1,6 @@
 {
   "name": "faultkit",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Framework-agnostic, OpenAPI-compliant error handling and cloud-native structured logging (Pino/Loki) for TypeScript and Node.js backends.",
   "author": "Sahil Sharma <sahilsharma3043@gmail.com>",
   "license": "MIT",

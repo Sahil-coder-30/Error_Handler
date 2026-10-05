@@ -68,16 +68,41 @@ export abstract class AppError extends Error {
 
   /**
    * Serializes the error into the strict OpenAPI `ErrorResponse` shape.
-   * Used internally by middleware — but available for unit testing.
+   * Accepts an optional distributed requestId.
    */
-  public toJSON() {
+  public toJSON(requestId?: string) {
     return {
       success: false as const,
       error: {
         code: this.errorCode,
         message: this.message,
         details: this.details,
+        ...(requestId ? { requestId } : {}),
       },
+      ...(requestId ? { requestId } : {}),
     };
+  }
+
+  /**
+   * Static helper to format any error (AppError, native Error, Mongoose, or unknown)
+   * into a standardized OpenAPI ErrorResponse for non-HTTP environments (WebSockets, RabbitMQ, etc.).
+   */
+  public static format(
+    err: unknown,
+    options?: import("./format.js").FormatErrorOptions
+  ) {
+    // Dynamic import style to avoid circular module dependency at initialization
+    const { toErrorResponse } = require("./format.js");
+    return toErrorResponse(err, options);
+  }
+
+  /**
+   * Static alias for `AppError.format(err, options)`.
+   */
+  public static toResponse(
+    err: unknown,
+    options?: import("./format.js").FormatErrorOptions
+  ) {
+    return AppError.format(err, options);
   }
 }

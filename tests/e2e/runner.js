@@ -13,6 +13,7 @@ const suite6 = require("../logger.test.js");
 const suiteStressLogger = require("../stress_logger_standalone.test.js");
 const suiteStressErrorHandler = require("../stress_errorhandler_standalone.test.js");
 const suiteStressCombined = require("../stress_combined_e2e.test.js");
+const suiteV11 = require("../features_v1_1.test.js");
 
 async function runAll() {
   console.log("============================================================");
@@ -30,6 +31,7 @@ async function runAll() {
     totalFailures += await suiteStressLogger.run();
     totalFailures += await suiteStressErrorHandler.run();
     totalFailures += await suiteStressCombined.run();
+    totalFailures += await suiteV11.run();
 
     // Dynamically import ESM suite 5
     const suite5 = await import("./05_esm_consumer.test.mjs");
@@ -37,8 +39,8 @@ async function runAll() {
 
     console.log("============================================================");
     if (totalFailures === 0) {
-      console.log("  🎉 ALL 9 E2E, LOGGER & ADVERSARIAL STRESS SUITES PASSED! ");
-      console.log("  Verified: CJS, ESM, Types, HTTP Contract, Pino Logging & Chaos.");
+      console.log("  🎉 ALL 10 E2E, LOGGER & PRODUCTION STRESS SUITES PASSED! ");
+      console.log("  Verified: CJS, ESM, Types, HTTP, Coercion, WebSockets, & Tracing.");
       console.log("  100% PRODUCTION READY & BATTLE TESTED FOR PRODUCTION.    ");
     } else {
       console.error(`  💥 ${totalFailures} test failure(s) detected across suites.`);

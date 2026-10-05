@@ -10,7 +10,13 @@
  */
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-export type { ErrorCodeValue, ErrorPayload, ErrorResponse } from "./types.js";
+export type {
+  ErrorCodeValue,
+  StandardErrorCode,
+  ErrorPayload,
+  ErrorResponse,
+  ErrorCoercer,
+} from "./types.js";
 export { ErrorCode } from "./types.js";
 
 // ── Abstract Base ─────────────────────────────────────────────────────────────
@@ -32,6 +38,10 @@ export {
   ServiceUnavailableError,
 } from "./errors.js";
 
+// ── Normalization & Formatting (WebSockets, RabbitMQ, Lambdas) ────────────────
+export { coerceToAppError } from "./coerce.js";
+export { toErrorResponse, formatError, type FormatErrorOptions } from "./format.js";
+
 // ── Observability & Logging ───────────────────────────────────────────────────
 export {
   logger,
@@ -43,4 +53,3 @@ export {
   type FaultKitLoggerOptions,
   type FaultGuardLoggerOptions,
 } from "./logger.js";
-

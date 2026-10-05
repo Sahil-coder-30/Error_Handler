@@ -65,9 +65,10 @@ What is the task?
 │   ├── Express service?
 │   │   └── USE: createExpressErrorHandler(options) from "faultkit/express"
 │   │       ├── MOUNT: as the absolute last middleware (after all routes)
+│   │       ├── SUPPORTS: Mongoose errors (ValidationError, 11000) & custom errorCoercer
 │   │       └── ENSURE: 4-argument signature (err, req, res, next)
-│   └── Fastify / Hono / AWS Lambda?
-│       └── USE: err.toJSON() on AppError instances from "faultkit"
+│   └── WebSockets (Socket.io) / Message Queues (RabbitMQ) / Fastify / Lambda?
+│       └── USE: toErrorResponse(err, { requestId }) or formatError(err) from "faultkit"
 │
 ├── 3. Logging events or tracing requests?
 │   ├── Zero-config application logging? ──> USE: logger from "faultkit"
@@ -252,12 +253,53 @@ export class InsufficientFundsError extends AppError {
     super(
       `Insufficient balance. Available: ${available}, required: ${required}`,
       422,
-      "INSUFFICIENT_FUNDS" as unknown as ErrorCodeValue,
+      "INSUFFICIENT_FUNDS",
       { available, required },
       true // isOperational = true
     );
   }
 }
+```
+
+### Recipe 5: Mongoose & Custom Error Coercion in Express
+```typescript
+import { createExpressErrorHandler } from "faultkit/express";
+import { ConflictError } from "faultkit";
+
+app.use(createExpressErrorHandler({
+  // Built-in: Mongoose ValidationError maps to 400, code 11000 maps to 409 Conflict.
+  // Optional custom coercion for Prisma or Stripe:
+  errorCoercer: (err: any) => {
+    if (err?.code === "P2002") {
+      return new ConflictError("Database record with unique constraint already exists.");
+    }
+  },
+  includeRequestId: true, // extracts x-request-id into logs and error responses
+}));
+```
+
+### Recipe 6: WebSockets (Socket.io) & Message Queues (RabbitMQ)
+```typescript
+import { toErrorResponse, formatError, logger } from "faultkit";
+
+// Socket.io event:
+socket.on("agent:invoke", async (data) => {
+  try {
+    await runAgent(data);
+  } catch (err) {
+    socket.emit("agent:error", toErrorResponse(err, { requestId: data.requestId }));
+  }
+});
+
+// RabbitMQ consumer:
+channel.consume("task_queue", async (msg) => {
+  try {
+    await processTask(msg);
+  } catch (err) {
+    const envelope = formatError(err, { requestId: msg.properties.correlationId });
+    logger.error({ err, envelope }, "Task worker error");
+  }
+});
 ```
 
 ---

@@ -203,6 +203,18 @@ app.use(
     // Default: "An unexpected error occurred. Our team has been notified."
     genericServerErrorMessage: "Internal server error. Please try again later.",
 
+    // Custom error coercion hook to map Mongoose, Prisma, or proprietary library errors
+    errorCoercer: (err) => {
+      if (err?.code === "P2002") return new ConflictError("Database record already exists.");
+    },
+
+    // Whether to extract and include a distributed correlation ID in logs and responses
+    // Default: true
+    includeRequestId: true,
+
+    // Header name to extract correlation ID from (Default: 'x-request-id')
+    requestIdHeader: "x-request-id",
+
     // Whether to print stack traces in server-side logs
     // Default: process.env.NODE_ENV !== "production"
     includeStackInLog: true,
@@ -306,6 +318,48 @@ export async function handler(event: any) {
     };
   }
 }
+```
+
+### WebSockets & Realtime Streaming (Socket.io)
+When streaming LLM tokens or bidirectional events over WebSockets, use `toErrorResponse` to emit identical error envelopes:
+
+```typescript
+import { toErrorResponse } from "faultkit";
+
+io.on("connection", (socket) => {
+  socket.on("agent:invoke", async (data) => {
+    try {
+      await runAgentPipeline(data);
+    } catch (err) {
+      // Emits { success: false, error: { code, message, details, requestId }, requestId }
+      socket.emit("agent:error", toErrorResponse(err, {
+        requestId: data.requestId || socket.id,
+      }));
+    }
+  });
+});
+```
+
+### Message Queues (RabbitMQ, BullMQ, Kafka)
+When asynchronous workers consume queue messages, format errors consistently for dead-letter queues and Loki alerts:
+
+```typescript
+import { formatError, logger } from "faultkit";
+
+channel.consume("payment_webhooks", async (msg) => {
+  try {
+    await processPayment(JSON.parse(msg.content.toString()));
+    channel.ack(msg);
+  } catch (err) {
+    const errorEnvelope = formatError(err, {
+      requestId: msg.properties.correlationId,
+      isProduction: process.env.NODE_ENV === "production",
+    });
+
+    logger.error({ err, errorEnvelope }, "Payment webhook processing failed");
+    channel.nack(msg, false, false); // route to DLQ
+  }
+});
 ```
 
 ---

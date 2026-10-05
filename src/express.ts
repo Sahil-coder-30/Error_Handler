@@ -3,30 +3,31 @@
  * @description Express-specific error handling middleware factory.
  *
  * This file is the ONLY place in the package that depends on Express types.
- * It is exported via its own entry point (`faultguard/express`)
+ * It is exported via its own entry point (`faultkit/express`)
  * so that non-Express consumers never pay the cost of this import.
  *
- * Key behaviours:
- *  1. Coerces unknown thrown values (strings, plain objects, native Errors) into
- *     a safe AppError-compatible shape before responding.
- *  2. Distinguishes operational errors (expected) from programmer errors (unexpected).
- *     - Operational: uses the error's own message and code.
- *     - Non-operational / unknown: logs the raw error, returns a safe generic 500.
- *  3. Never leaks stack traces or internal details to the client in production.
- *  4. Logger is injected via the factory options — keeps the package dependency-free.
+ * Key features:
+ *  1. Coerces unknown thrown values, native Errors, Mongoose ValidationErrors,
+ *     MongoDB duplicate key errors (11000), and custom ORM exceptions safely.
+ *  2. Supports custom `errorCoercer` hook for domain/library error mapping.
+ *  3. Distinguishes operational errors (4xx logged at warn) from programmer crashes (5xx logged at error).
+ *  4. Distributed tracing: extracts and propagates `requestId` in logs, headers, and response body.
+ *  5. Never leaks stack traces or sensitive internal details to the client in production.
+ *  6. Logger injection with crash-resilient fallback boundary.
  */
 
 import type { Request, Response, NextFunction, ErrorRequestHandler } from "express";
 import { AppError } from "./AppError.js";
-import { ErrorCode, type ErrorResponse } from "./types.js";
+import { ErrorCode, type ErrorResponse, type ErrorCoercer } from "./types.js";
 import { logger as defaultLogger } from "./logger.js";
+import { coerceToAppError } from "./coerce.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Options
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * A logger interface compatible with FaultGuard's built-in Pino logger,
+ * A logger interface compatible with FaultKit's built-in Pino logger,
  * standard `console`, `winston`, or custom loggers.
  */
 export interface ErrorHandlerLogger {
@@ -36,7 +37,7 @@ export interface ErrorHandlerLogger {
 
 export interface ErrorHandlerOptions {
   /**
-   * Injected logger. Defaults to FaultGuard's built-in Grafana/Loki-optimized Pino logger.
+   * Injected logger. Defaults to FaultKit's built-in Grafana/Loki-optimized Pino logger.
    * You can also supply custom Pino, Winston, or console instances.
    */
   logger?: ErrorHandlerLogger;
@@ -53,6 +54,30 @@ export interface ErrorHandlerOptions {
    * Prevents leaking internal implementation details to API consumers.
    */
   genericServerErrorMessage?: string;
+
+  /**
+   * Custom error coercion hook to map Mongoose, Prisma, or proprietary library errors.
+   * Runs before default error normalization.
+   */
+  errorCoercer?: ErrorCoercer;
+
+  /**
+   * Whether to extract and include a distributed correlation/request ID in logs and responses.
+   * Defaults to `true`.
+   */
+  includeRequestId?: boolean;
+
+  /**
+   * Request header name to extract correlation ID from.
+   * Defaults to `'x-request-id'`.
+   */
+  requestIdHeader?: string;
+
+  /**
+   * Custom function to extract or generate the request ID from the Express request.
+   * Defaults to `req.id || req.headers[requestIdHeader] || req.headers['x-correlation-id']`.
+   */
+  getRequestId?: (req: Request) => string | undefined;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -68,13 +93,14 @@ export interface ErrorHandlerOptions {
  * @example
  * ```ts
  * import express from 'express';
- * import { createExpressErrorHandler } from 'faultguard/express';
- * import pino from 'pino';
+ * import { createExpressErrorHandler } from 'faultkit/express';
  *
  * const app = express();
- * const logger = pino();
- *
- * app.use(createExpressErrorHandler({ logger }));
+ * app.use(createExpressErrorHandler({
+ *   errorCoercer: (err) => {
+ *     if (isPrismaError(err)) return new ConflictError("Database constraint violated");
+ *   }
+ * }));
  * ```
  */
 export function createExpressErrorHandler(
@@ -84,14 +110,16 @@ export function createExpressErrorHandler(
     logger = defaultLogger,
     includeStackInLog = process.env.NODE_ENV !== "production",
     genericServerErrorMessage = "An unexpected error occurred. Our team has been notified.",
+    errorCoercer,
+    includeRequestId = true,
+    requestIdHeader = "x-request-id",
+    getRequestId,
   } = options;
 
   // Express identifies a global error handler by its 4-argument signature: (err, req, res, next).
-  // The `_next` parameter is intentionally unused but MUST be declared for Express to recognize
-  // this as an error handler.
   return function globalErrorHandler(
     err: unknown,
-    _req: Request,
+    req: Request,
     res: Response,
     next: NextFunction
   ): void {
@@ -101,104 +129,56 @@ export function createExpressErrorHandler(
     }
 
     // ── Step 1: Normalize the thrown value into an AppError ──────────────────
+    const appError: AppError = coerceToAppError(err, errorCoercer);
 
-    let appError: AppError;
-
-    if (err instanceof AppError) {
-      // Happy path: one of our typed errors was thrown.
-      appError = err;
-    } else if (err instanceof Error) {
-      // Check if a third-party library or Express middleware attached a status code
-      // (e.g. body-parser SyntaxError on malformed JSON sets err.status = 400).
-      const anyErr = err as unknown as { status?: unknown; statusCode?: unknown; code?: unknown };
-      const rawStatus = anyErr.statusCode ?? anyErr.status;
-      const parsedStatus = typeof rawStatus === "number" && rawStatus >= 400 && rawStatus <= 599
-        ? rawStatus
-        : 500;
-
-      const isClientError = parsedStatus >= 400 && parsedStatus < 500;
-
-      // Map HTTP status to appropriate ErrorCode
-      let resolvedCode: (typeof ErrorCode)[keyof typeof ErrorCode] = ErrorCode.INTERNAL_SERVER_ERROR;
-      if (parsedStatus === 400) resolvedCode = ErrorCode.BAD_REQUEST;
-      else if (parsedStatus === 401) resolvedCode = ErrorCode.UNAUTHORIZED;
-      else if (parsedStatus === 403) resolvedCode = ErrorCode.FORBIDDEN;
-      else if (parsedStatus === 404) resolvedCode = ErrorCode.NOT_FOUND;
-      else if (parsedStatus === 409) resolvedCode = ErrorCode.CONFLICT;
-      else if (parsedStatus === 422) resolvedCode = ErrorCode.UNPROCESSABLE_ENTITY;
-      else if (parsedStatus === 429) resolvedCode = ErrorCode.RATE_LIMIT_EXCEEDED;
-      else if (parsedStatus === 503) resolvedCode = ErrorCode.SERVICE_UNAVAILABLE;
-      else if (isClientError) resolvedCode = ErrorCode.BAD_REQUEST;
-
-      const wrappedError = Object.assign(
-        Object.create(AppError.prototype),
-        {
-          name: err.name || (isClientError ? "BadRequestError" : "InternalServerError"),
-          message: err.message || (isClientError ? "Bad Request" : "An unexpected internal server error occurred."),
-          statusCode: parsedStatus,
-          errorCode: resolvedCode,
-          details: null,
-          isOperational: isClientError, // 4xx from libraries are operational; 5xx are crashes
-          stack: err.stack,
+    // ── Step 2: Distributed Request / Correlation ID ─────────────────────────
+    let requestId: string | undefined;
+    if (includeRequestId) {
+      if (typeof getRequestId === "function") {
+        try {
+          requestId = getRequestId(req);
+        } catch {
+          // ignore extractor errors
         }
-      ) as AppError;
-      appError = wrappedError;
-    } else {
-      // A completely unknown value was thrown (e.g. `throw "something"`, `throw null`, or `throw { status: 400, message: "custom" }`).
-      let message = "An unknown error occurred.";
-      let parsedStatus = 500;
-      let isOperational = false;
-      let resolvedCode: (typeof ErrorCode)[keyof typeof ErrorCode] = ErrorCode.INTERNAL_SERVER_ERROR;
+      }
+      if (!requestId && req) {
+        const anyReq = req as unknown as Record<string, unknown>;
+        requestId =
+          (typeof anyReq.id === "string" ? anyReq.id : undefined) ||
+          (typeof anyReq.requestId === "string" ? anyReq.requestId : undefined) ||
+          (typeof anyReq.correlationId === "string" ? anyReq.correlationId : undefined);
 
-      try {
-        if (typeof err === "string") {
-          message = err.length > 0 ? err : "An unknown error occurred.";
-        } else if (err && typeof err === "object") {
-          const anyErr = err as Record<string, unknown>;
-          if (typeof anyErr.message === "string" && anyErr.message.length > 0) {
-            message = anyErr.message;
-          }
-          const rawStatus = anyErr.statusCode ?? anyErr.status;
-          if (typeof rawStatus === "number" && rawStatus >= 400 && rawStatus <= 599) {
-            parsedStatus = rawStatus;
-            isOperational = rawStatus < 500;
-            if (rawStatus === 400) resolvedCode = ErrorCode.BAD_REQUEST;
-            else if (rawStatus === 401) resolvedCode = ErrorCode.UNAUTHORIZED;
-            else if (rawStatus === 403) resolvedCode = ErrorCode.FORBIDDEN;
-            else if (rawStatus === 404) resolvedCode = ErrorCode.NOT_FOUND;
-            else if (rawStatus === 409) resolvedCode = ErrorCode.CONFLICT;
-            else if (rawStatus === 422) resolvedCode = ErrorCode.UNPROCESSABLE_ENTITY;
-            else if (rawStatus === 429) resolvedCode = ErrorCode.RATE_LIMIT_EXCEEDED;
-            else if (rawStatus === 503) resolvedCode = ErrorCode.SERVICE_UNAVAILABLE;
-            else if (isOperational) resolvedCode = ErrorCode.BAD_REQUEST;
+        if (!requestId && req.headers) {
+          const headerVal =
+            req.headers[requestIdHeader.toLowerCase()] ||
+            req.headers["x-correlation-id"];
+          if (typeof headerVal === "string") {
+            requestId = headerVal;
+          } else if (Array.isArray(headerVal) && headerVal[0]) {
+            requestId = headerVal[0];
           }
         }
-      } catch {
-        message = "An unreadable error was thrown.";
       }
 
-      const wrappedError = Object.assign(
-        Object.create(AppError.prototype),
-        {
-          name: isOperational ? "BadRequestError" : "InternalServerError",
-          message,
-          statusCode: parsedStatus,
-          errorCode: resolvedCode,
-          details: null,
-          isOperational,
-          stack: undefined,
+      // Propagate correlation ID in outgoing response headers if not already set
+      if (requestId && !res.headersSent && typeof res.setHeader === "function") {
+        try {
+          res.setHeader(requestIdHeader, requestId);
+        } catch {
+          // safe boundary
         }
-      ) as AppError;
-      appError = wrappedError;
+      }
     }
 
-    // ── Step 2: Log with appropriate severity ────────────────────────────────
-
+    // ── Step 3: Log with appropriate severity & correlation context ──────────
     const logMeta = {
       statusCode: appError.statusCode,
       errorCode: appError.errorCode,
       isOperational: appError.isOperational,
       details: appError.details,
+      path: req ? req.originalUrl || req.url : undefined,
+      method: req ? req.method : undefined,
+      ...(requestId ? { requestId } : {}),
       ...(includeStackInLog && { stack: appError.stack }),
     };
 
@@ -226,14 +206,12 @@ export function createExpressErrorHandler(
       console.error("[FaultKit] Logger invocation failed:", loggingErr);
     }
 
-    // ── Step 3: Build the strict OpenAPI-compliant response ──────────────────
-
+    // ── Step 4: Build the strict OpenAPI-compliant response ──────────────────
     const isProduction = process.env.NODE_ENV === "production";
 
     /**
-     * For non-operational errors in production, we hide the real message to
-     * prevent leaking implementation details. In development, we show it to
-     * make debugging easier.
+     * For non-operational errors in production, hide the real message to
+     * prevent leaking implementation details. In development, show it.
      */
     const clientMessage =
       appError.isOperational || !isProduction
@@ -246,11 +224,12 @@ export function createExpressErrorHandler(
         code: appError.errorCode,
         message: clientMessage,
         details: appError.isOperational ? appError.details : null,
+        ...(requestId ? { requestId } : {}),
       },
+      ...(requestId ? { requestId } : {}),
     };
 
-    // ── Step 4: Send the response ─────────────────────────────────────────────
-
+    // ── Step 5: Send the response ────────────────────────────────────────────
     res.status(appError.statusCode).json(responseBody);
   };
 }
