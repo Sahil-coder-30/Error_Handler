@@ -163,3 +163,80 @@ export class ServiceUnavailableError extends AppError {
     super(message, 503, ErrorCode.SERVICE_UNAVAILABLE, null, false);
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI & LLM Orchestration Errors
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 400 Context Window Exceeded — The prompt or token count exceeds model limits.
+ */
+export class ContextWindowExceededError extends AppError {
+  constructor(
+    message = "The token context window limit for this model has been exceeded.",
+    details: unknown | null = null
+  ) {
+    super(message, 400, ErrorCode.CONTEXT_WINDOW_EXCEEDED, details);
+  }
+}
+
+/**
+ * 429 Model Rate Limit — Downstream AI model provider rate limit hit (TPM or RPM).
+ */
+export class ModelRateLimitError extends AppError {
+  constructor(
+    message = "AI model rate limit exceeded. Please retry after backoff.",
+    details: unknown | null = null
+  ) {
+    super(message, 429, ErrorCode.MODEL_RATE_LIMIT, details);
+  }
+}
+
+/**
+ * 503 LLM Provider Down — Downstream LLM provider (OpenAI, Anthropic, etc.) is unreachable or degraded.
+ */
+export class LlmProviderDownError extends AppError {
+  constructor(
+    message = "The upstream AI provider is currently unreachable or experiencing an outage.",
+    details: unknown | null = null
+  ) {
+    super(message, 503, ErrorCode.LLM_PROVIDER_DOWN, details, false);
+  }
+}
+
+/**
+ * 402 / 403 Insufficient Credits — Account has insufficient token quota or balance for generation.
+ */
+export class InsufficientCreditsError extends AppError {
+  constructor(
+    message = "Insufficient AI credits or balance to complete this request.",
+    details: unknown | null = null
+  ) {
+    super(message, 402, ErrorCode.INSUFFICIENT_CREDITS, details);
+  }
+}
+
+/**
+ * 400 Content Filtered — Safety filters or guardrails blocked generation input/output.
+ */
+export class ContentFilteredError extends AppError {
+  constructor(
+    message = "Request was blocked by safety filters or guardrails.",
+    details: unknown | null = null
+  ) {
+    super(message, 400, ErrorCode.CONTENT_FILTERED, details);
+  }
+}
+
+/**
+ * 404 Model Not Found — The requested AI model or checkpoint is unrecognized.
+ */
+export class ModelNotFoundError extends AppError {
+  constructor(
+    message = "The specified AI model could not be found.",
+    details: unknown | null = null
+  ) {
+    super(message, 404, ErrorCode.MODEL_NOT_FOUND, details);
+  }
+}
+

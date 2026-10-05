@@ -36,6 +36,12 @@ export {
   RateLimitError,
   InternalServerError,
   ServiceUnavailableError,
+  ContextWindowExceededError,
+  ModelRateLimitError,
+  LlmProviderDownError,
+  InsufficientCreditsError,
+  ContentFilteredError,
+  ModelNotFoundError,
 } from "./errors.js";
 
 // ── Normalization & Formatting (WebSockets, RabbitMQ, Lambdas) ────────────────

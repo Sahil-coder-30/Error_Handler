@@ -19,6 +19,12 @@ const {
   RateLimitError,
   InternalServerError,
   ServiceUnavailableError,
+  ContextWindowExceededError,
+  ModelRateLimitError,
+  LlmProviderDownError,
+  InsufficientCreditsError,
+  ContentFilteredError,
+  ModelNotFoundError,
   ErrorCode,
 } = require("../dist/cjs/index.js");
 
@@ -78,10 +84,21 @@ assert(new ServiceUnavailableError().statusCode === 503, "503 ServiceUnavailable
 // 5. Operational vs Non-operational flags
 assert(new InternalServerError().isOperational === false, "500 isOperational is false");
 assert(new ServiceUnavailableError().isOperational === false, "503 isOperational is false");
+assert(new LlmProviderDownError().isOperational === false, "503 LlmProviderDownError isOperational is false");
 
-// 6. ErrorCode completeness
+// 6. AI & LLM Error Classes
+assert(new ContextWindowExceededError().statusCode === 400, "ContextWindowExceededError status is 400");
+assert(new ContextWindowExceededError().errorCode === ErrorCode.CONTEXT_WINDOW_EXCEEDED, "ContextWindowExceededError code matches");
+assert(new ModelRateLimitError().statusCode === 429, "ModelRateLimitError status is 429");
+assert(new ModelRateLimitError().errorCode === ErrorCode.MODEL_RATE_LIMIT, "ModelRateLimitError code matches");
+assert(new LlmProviderDownError().statusCode === 503, "LlmProviderDownError status is 503");
+assert(new InsufficientCreditsError().statusCode === 402, "InsufficientCreditsError status is 402");
+assert(new ContentFilteredError().statusCode === 400, "ContentFilteredError status is 400");
+assert(new ModelNotFoundError().statusCode === 404, "ModelNotFoundError status is 404");
+
+// 7. ErrorCode completeness
 const codes = Object.values(ErrorCode);
-assert(codes.length >= 12, "ErrorCode enum has all required keys");
+assert(codes.length >= 18, "ErrorCode enum has all required keys including AI codes");
 assert(codes.every((c) => typeof c === "string"), "All codes are strings");
 
 // 7. Express middleware factory initialization
