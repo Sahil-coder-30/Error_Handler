@@ -6,12 +6,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Sahil-coder-30/faultguard.git"
+    "url": "git+https://github.com/Sahil-coder-30/Error_Handler.git"
   },
   "bugs": {
-    "url": "https://github.com/Sahil-coder-30/faultguard/issues"
+    "url": "https://github.com/Sahil-coder-30/Error_Handler/issues"
   },
-  "homepage": "https://github.com/Sahil-coder-30/faultguard#readme",
+  "homepage": "https://github.com/Sahil-coder-30/Error_Handler#readme",
   "keywords": [
     "error-handler",
     "typescript",
