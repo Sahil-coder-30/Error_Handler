@@ -223,7 +223,7 @@ export function createExpressErrorHandler(
         }
       }
     } catch (loggingErr) {
-      console.error("[FaultGuard] Logger invocation failed:", loggingErr);
+      console.error("[FaultKit] Logger invocation failed:", loggingErr);
     }
 
     // ── Step 3: Build the strict OpenAPI-compliant response ──────────────────

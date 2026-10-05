@@ -3,7 +3,7 @@
  * @description How to extend AppError to build domain-specific error hierarchies.
  */
 
-import { AppError, type ErrorCodeValue } from "faultguard";
+import { AppError, type ErrorCodeValue } from "faultkit";
 
 /**
  * 402 Payment Required / Payment Declined

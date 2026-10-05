@@ -1,6 +1,6 @@
 /**
  * @file examples/01-express-production/server.ts
- * @description Production-grade Express backend example using FaultGuard.
+ * @description Production-grade Express backend example using FaultKit.
  * Demonstrates:
  *  - Centralized OpenAPI-compliant error middleware
  *  - Request ID tracing with Pino child loggers
@@ -18,8 +18,8 @@ import {
   UnauthorizedError,
   ForbiddenError,
   logger,
-} from "faultguard";
-import { createExpressErrorHandler } from "faultguard/express";
+} from "faultkit";
+import { createExpressErrorHandler } from "faultkit/express";
 
 // Extend Express Request type to include our correlated child logger
 declare global {
@@ -33,7 +33,7 @@ declare global {
 
 const app = express();
 
-// 1. Parse JSON bodies (Malformed JSON automatically returns 400 BAD_REQUEST via FaultGuard)
+// 1. Parse JSON bodies (Malformed JSON automatically returns 400 BAD_REQUEST via FaultKit)
 app.use(express.json());
 
 // 2. Request Tracing Middleware
@@ -113,7 +113,7 @@ app.post("/api/users", async (req: Request, res: Response, next: NextFunction) =
     };
     usersDb.set(newUser.id, newUser);
 
-    // Notice: password is automatically redacted by FaultGuard logger if logged!
+    // Notice: password is automatically redacted by FaultKit logger if logged!
     req.log.info({ user: newUser, password }, "User created");
 
     res.status(201).json({ success: true, data: newUser });
@@ -169,6 +169,6 @@ export default app;
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
-    logger.info({ port: PORT }, "FaultGuard production example server listening");
+    logger.info({ port: PORT }, "FaultKit production example server listening");
   });
 }

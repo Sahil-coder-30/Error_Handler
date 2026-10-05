@@ -44,7 +44,7 @@ function captureLogStream() {
 }
 
 function run() {
-  console.log("\n🌲 Testing FaultGuard Built-in Pino Logger (Grafana / Loki Ready)");
+  console.log("\n🌲 Testing FaultKit Built-in Pino Logger (Grafana / Loki Ready)");
   console.log("─────────────────────────────────────────────────────────────\n");
 
   // ── Test 1: Basic Logging Output ───────────────────────────────────────────

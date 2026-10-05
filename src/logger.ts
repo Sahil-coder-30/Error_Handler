@@ -21,7 +21,7 @@ import { AppError } from "./AppError.js";
 export type Logger = PinoLogger;
 export type LogLevel = LevelWithSilentOrString;
 
-export interface FaultGuardLoggerOptions {
+export interface FaultKitLoggerOptions {
   /**
    * Name of the application or microservice (e.g. 'users-api', 'payment-service').
    * Included in all log entries for easy filtering in Grafana Loki.
@@ -63,6 +63,9 @@ export interface FaultGuardLoggerOptions {
    */
   destination?: pino.DestinationStream;
 }
+
+/** Backward-compatible alias for FaultKitLoggerOptions */
+export type FaultGuardLoggerOptions = FaultKitLoggerOptions;
 
 /**
  * Default list of sensitive keys automatically redacted from all JSON output.
@@ -138,7 +141,7 @@ export function createAppErrorSerializer(includeStack: boolean = true) {
  * ```
  */
 export function createLogger(
-  options: FaultGuardLoggerOptions = {},
+  options: FaultKitLoggerOptions = {},
   destination?: pino.DestinationStream
 ): Logger {
   const {

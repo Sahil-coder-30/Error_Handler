@@ -1,15 +1,15 @@
-# faultguard
+# faultkit
 
 > Production-grade, OpenAPI-compliant error handling and Grafana/Loki-ready structured logging for TypeScript and Node.js.
 
-[![npm version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://www.npmjs.com/package/faultguard)
+[![npm version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://www.npmjs.com/package/faultkit)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18.0.0-green.svg)](https://nodejs.org/)
 
 ---
 
-## 1. What FaultGuard Solves
+## 1. What FaultKit Solves
 
 In modern backend services, error handling is frequently fragmented:
 - Controllers return inconsistent response shapes (`{ error: "..." }`, `{ message: "..." }`, or raw HTML error pages).
@@ -17,29 +17,29 @@ In modern backend services, error handling is frequently fragmented:
 - Uncaught exceptions leak database credentials, file paths, or raw stack traces to end users.
 - Server logs lack request correlation IDs, fail to redact secrets, or aren't formatted for ingestion by log aggregators like Grafana Loki.
 
-**FaultGuard** unifies error handling and observability into a single, cohesive foundation:
+**FaultKit** unifies error handling and observability into a single, cohesive foundation:
 1. **Guaranteed OpenAPI Contract:** Every error response strictly matches `{ success: false, error: { code, message, details } }`.
 2. **Operational vs. Non-Operational Separation:** Differentiates expected client mistakes (4xx, logged at `warn`) from unexpected crashes (5xx, logged at `error`, masked in production).
 3. **Production Safety:** Sensitive error messages and stack traces are automatically masked in production HTTP responses.
 4. **Cloud-Native Logging:** Ships with a pre-configured Pino logger producing single-line ISO-8601 JSON for Grafana Loki, Datadog, and CloudWatch.
-5. **AI-Agent Native:** Includes built-in Agent Skills and a zero-config setup CLI (`npx faultguard init`) for autonomous AI coding agents.
+5. **AI-Agent Native:** Includes built-in Agent Skills and a zero-config setup CLI (`npx faultkit init`) for autonomous AI coding agents.
 
 ---
 
 ## 2. Why It Exists
 
-Most error handling libraries either couple you tightly to a specific web framework or require dozens of lines of repetitive boilerplate across every route. FaultGuard separates pure domain logic from transport concerns:
+Most error handling libraries either couple you tightly to a specific web framework or require dozens of lines of repetitive boilerplate across every route. FaultKit separates pure domain logic from transport concerns:
 
 - **Core domain code** throws typed errors extending `AppError` without importing Express or HTTP dependencies.
-- **Transport middleware** (`faultguard/express`) intercepts errors, normalizes unexpected exceptions, dispatches structured logs, and formats client-safe responses.
-- **Observability** (`faultguard/logger` or root) automatically extracts status codes, error codes, validation details, and stack traces into structured JSON logs.
+- **Transport middleware** (`faultkit/express`) intercepts errors, normalizes unexpected exceptions, dispatches structured logs, and formats client-safe responses.
+- **Observability** (`faultkit/logger` or root) automatically extracts status codes, error codes, validation details, and stack traces into structured JSON logs.
 
 ---
 
 ## 3. Installation
 
 ```bash
-npm install @sahilsharma30/faultguard
+npm install faultkit
 ```
 
 ### Optional Peer Dependency: Express
@@ -50,10 +50,10 @@ npm install express
 ```
 
 ### Configure AI Coding Agents (Optional)
-Equip your AI coding agent (Antigravity, Cursor, Copilot, or Claude) with FaultGuard architectural guidelines:
+Equip your AI coding agent (Antigravity, Cursor, Copilot, or Claude) with FaultKit architectural guidelines:
 
 ```bash
-npx faultguard init
+npx faultkit init
 ```
 
 ---
@@ -64,7 +64,7 @@ npx faultguard init
 Throw typed errors in your domain layer without any HTTP coupling:
 
 ```typescript
-import { NotFoundError, ValidationError, ConflictError } from "faultguard";
+import { NotFoundError, ValidationError, ConflictError } from "faultkit";
 
 // 404 Not Found
 export async function getUser(userId: string) {
@@ -89,7 +89,7 @@ Mount `createExpressErrorHandler()` as the **last middleware** in your Express a
 
 ```typescript
 import express from "express";
-import { createExpressErrorHandler } from "faultguard/express";
+import { createExpressErrorHandler } from "faultkit/express";
 import { getUser, validateCreateUser } from "./userService.js";
 
 const app = express();
@@ -115,11 +115,11 @@ app.listen(3000);
 Log application events with the pre-configured Pino logger:
 
 ```typescript
-import { logger } from "faultguard";
+import { logger } from "faultkit";
 
 logger.info("Order processed successfully", { orderId: "ord_102" });
 
-// Always pass { err } so FaultGuard automatically extracts status and error codes
+// Always pass { err } so FaultKit automatically extracts status and error codes
 logger.error({ err }, "Payment capture failed");
 ```
 
@@ -128,7 +128,7 @@ logger.error({ err }, "Payment capture failed");
 ## 5. Core API Reference
 
 ### OpenAPI Error Response Contract
-Every non-2xx response emitted by FaultGuard middleware adheres to this exact contract:
+Every non-2xx response emitted by FaultKit middleware adheres to this exact contract:
 
 ```json
 {
@@ -173,14 +173,14 @@ Every non-2xx response emitted by FaultGuard middleware adheres to this exact co
 ## 6. Configuration Options
 
 ### `createExpressErrorHandler(options)`
-Exported from `"faultguard/express"`:
+Exported from `"faultkit/express"`:
 
 ```typescript
-import { createExpressErrorHandler } from "faultguard/express";
+import { createExpressErrorHandler } from "faultkit/express";
 
 app.use(
   createExpressErrorHandler({
-    // Custom logger instance (defaults to FaultGuard's built-in Pino logger)
+    // Custom logger instance (defaults to FaultKit's built-in Pino logger)
     logger: customLogger,
 
     // Masked message sent to clients for non-operational 5xx errors in production
@@ -195,10 +195,10 @@ app.use(
 ```
 
 ### `createLogger(options)`
-Exported from `"faultguard"` (or `"faultguard/logger"`):
+Exported from `"faultkit"` (or `"faultkit/logger"`):
 
 ```typescript
-import { createLogger } from "faultguard";
+import { createLogger } from "faultkit";
 
 const logger = createLogger({
   // Service name for Loki / Datadog filtering (Default: process.env.SERVICE_NAME || 'api')
@@ -223,11 +223,11 @@ const logger = createLogger({
 ## 7. Framework Integrations
 
 ### Express (v4 and v5)
-The Express adapter is isolated under the `"faultguard/express"` subpath export to keep non-Express applications lean:
+The Express adapter is isolated under the `"faultkit/express"` subpath export to keep non-Express applications lean:
 
 ```typescript
 import express from "express";
-import { createExpressErrorHandler } from "faultguard/express";
+import { createExpressErrorHandler } from "faultkit/express";
 
 const app = express();
 app.use(express.json());
@@ -240,11 +240,11 @@ app.use(createExpressErrorHandler());
 ```
 
 ### Fastify
-Use FaultGuard error classes and the built-in `.toJSON()` serialization:
+Use FaultKit error classes and the built-in `.toJSON()` serialization:
 
 ```typescript
 import Fastify from "fastify";
-import { AppError } from "faultguard";
+import { AppError } from "faultkit";
 
 const fastify = Fastify();
 
@@ -266,7 +266,7 @@ fastify.setErrorHandler((error, request, reply) => {
 
 ### AWS Lambda / Hono / Serverless
 ```typescript
-import { AppError } from "faultguard";
+import { AppError } from "faultkit";
 
 export async function handler(event: any) {
   try {
@@ -343,7 +343,7 @@ Complete, runnable examples are provided in the [`examples/`](./examples) direct
 ## 10. Error Handling & Edge Cases
 
 ### Automatic 3rd-Party Error Coercion
-If a third-party library throws an error with a `.status` or `.statusCode` property (such as `body-parser` throwing a syntax error on malformed JSON with status 400), FaultGuard automatically:
+If a third-party library throws an error with a `.status` or `.statusCode` property (such as `body-parser` throwing a syntax error on malformed JSON with status 400), FaultKit automatically:
 - Maps the status code to the appropriate `ErrorCode` (e.g. `BAD_REQUEST`).
 - Treats 4xx library errors as **operational** (preserves message).
 - Maps 5xx library errors to `INTERNAL_SERVER_ERROR` with operational safety flags.
@@ -355,20 +355,20 @@ JavaScript allows throwing non-Error primitives:
 - `throw undefined`
 - Circular reference objects
 
-FaultGuard safely intercepts all non-Error throws, coerces them to `InternalServerError` (HTTP 500), prevents process crashes, and returns a sanitized JSON response.
+FaultKit safely intercepts all non-Error throws, coerces them to `InternalServerError` (HTTP 500), prevents process crashes, and returns a sanitized JSON response.
 
 ### Streaming Responses & `res.headersSent`
-If response headers were already sent to the client (for example during an SSE stream or file download), FaultGuard detects `res.headersSent` and delegates to the default Express handler (`next(err)`) to avoid triggering `ERR_HTTP_HEADERS_SENT`.
+If response headers were already sent to the client (for example during an SSE stream or file download), FaultKit detects `res.headersSent` and delegates to the default Express handler (`next(err)`) to avoid triggering `ERR_HTTP_HEADERS_SENT`.
 
 ---
 
 ## 11. Security Considerations
 
 ### 1. Production Error Masking
-In development (`NODE_ENV !== "production"`), FaultGuard returns the actual error message for easy debugging. In production (`NODE_ENV === "production"`), any non-operational error (500 crashes or native exceptions) has its message replaced with `genericServerErrorMessage` and `details` coerced to `null`. This prevents leaking database connection strings, file paths, or internal logic.
+In development (`NODE_ENV !== "production"`), FaultKit returns the actual error message for easy debugging. In production (`NODE_ENV === "production"`), any non-operational error (500 crashes or native exceptions) has its message replaced with `genericServerErrorMessage` and `details` coerced to `null`. This prevents leaking database connection strings, file paths, or internal logic.
 
 ### 2. Automatic Sensitive Data Redaction
-FaultGuard's logger automatically redacts sensitive parameters using `DEFAULT_REDACT_KEYS`:
+FaultKit's logger automatically redacts sensitive parameters using `DEFAULT_REDACT_KEYS`:
 - `req.headers.authorization`
 - `req.headers.cookie`
 - `authorization`
@@ -386,7 +386,7 @@ Redacted values appear in logs as `"[REDACTED]"`.
 
 ### Unit Testing Error Serialization
 ```typescript
-import { NotFoundError, ErrorCode } from "faultguard";
+import { NotFoundError, ErrorCode } from "faultkit";
 
 test("NotFoundError produces OpenAPI envelope", () => {
   const err = new NotFoundError("User missing");
@@ -423,10 +423,10 @@ npm run test:e2e
 
 | Anti-Pattern | Correct Pattern | Why |
 |---|---|---|
-| `import { createExpressErrorHandler } from "faultguard"` | `import { createExpressErrorHandler } from "faultguard/express"` | Express middleware is isolated behind a dedicated subpath to avoid pulling Express types into non-Express services. |
+| `import { createExpressErrorHandler } from "faultkit"` | `import { createExpressErrorHandler } from "faultkit/express"` | Express middleware is isolated behind a dedicated subpath to avoid pulling Express types into non-Express services. |
 | `new ValidationError("User invalid", errors)` | `new ValidationError(errors, "User invalid")` | `ValidationError` requires `details` as the first argument and `message` as optional second argument. |
 | `app.use(createExpressErrorHandler())` registered before routes | Mount `createExpressErrorHandler()` after all routes | Express routes registered after the error middleware will bypass the error handler. |
-| `logger.error(err.message)` | `logger.error({ err }, "Context message")` | Passing `{ err }` invokes FaultGuard's Pino serializer, extracting status, code, details, and stack trace. |
+| `logger.error(err.message)` | `logger.error({ err }, "Context message")` | Passing `{ err }` invokes FaultKit's Pino serializer, extracting status, code, details, and stack trace. |
 | `new AppError("msg", 400, "BAD_REQUEST")` | `new BadRequestError("msg")` | `AppError` is an abstract class; use concrete subclasses or create your own subclass. |
 | Expecting custom 500 error messages in production | Rely on `warn`/`error` server-side logs | Production message masking deliberately sanitizes 5xx responses for security. |
 
@@ -442,18 +442,18 @@ npm run test:e2e
 
 ## 15. AI-Agent Native Integration
 
-FaultGuard is designed from the ground up for autonomous AI coding agents (Antigravity, Cursor, Copilot, Claude Code).
+FaultKit is designed from the ground up for autonomous AI coding agents (Antigravity, Cursor, Copilot, Claude Code).
 
 ### Automatic Agent Setup via CLI
-To configure your project so coding agents follow FaultGuard best practices:
+To configure your project so coding agents follow FaultKit best practices:
 
 ```bash
-npx faultguard init
+npx faultkit init
 ```
 
 Supported targets:
-- `agents`: Installs `.agents/skills/faultguard/SKILL.md` (Antigravity / Agent Skills standard)
-- `cursor`: Generates `.cursor/rules/faultguard.mdc`
+- `agents`: Installs `.agents/skills/faultkit/SKILL.md` (Antigravity / Agent Skills standard)
+- `cursor`: Generates `.cursor/rules/faultkit.mdc`
 - `copilot`: Configures `.github/copilot-instructions.md`
 - `claude`: Configures `CLAUDE.md`
 - `all`: Installs all configurations
@@ -470,7 +470,7 @@ When coding agents evaluate backend logic:
 
 ## 16. Troubleshooting
 
-### Issue: `Cannot find module 'faultguard/express'`
+### Issue: `Cannot find module 'faultkit/express'`
 **Fix:** Ensure your `tsconfig.json` has `"moduleResolution": "NodeNext"` or `"Bundler"`, or ensure you are running Node.js `>= 18.0.0`.
 
 ### Issue: `UnhandledPromiseRejection` in Express 4
@@ -511,4 +511,4 @@ npm run build
 
 ## 18. License
 
-MIT © [Your Name](LICENSE)
+MIT © [Sahil Sharma](LICENSE)

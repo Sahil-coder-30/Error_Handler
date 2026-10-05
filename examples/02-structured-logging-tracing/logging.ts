@@ -8,7 +8,7 @@ import {
   logger,
   ValidationError,
   InternalServerError,
-} from "faultguard";
+} from "faultkit";
 
 // 1. Create a customized microservice logger
 export const paymentLogger = createLogger({
@@ -28,7 +28,7 @@ const traceLogger = paymentLogger.child({
 traceLogger.info("Initiating payment capture flow");
 
 // 3. Serializing an AppError
-// Note: Pass `{ err }` as the first argument so FaultGuard's Pino serializer
+// Note: Pass `{ err }` as the first argument so FaultKit's Pino serializer
 // extracts statusCode, errorCode, isOperational, and details automatically.
 const validationError = new ValidationError(
   { amount: ["Amount must be greater than 0"] },

@@ -1,6 +1,6 @@
 /**
  * @file examples/04-framework-agnostic/fastify-or-lambda.ts
- * @description Using FaultGuard with non-Express frameworks (Fastify, Hono, AWS Lambda).
+ * @description Using FaultKit with non-Express frameworks (Fastify, Hono, AWS Lambda).
  * Shows how core error classes and toJSON() work anywhere without Express dependencies.
  */
 
@@ -9,7 +9,7 @@ import {
   NotFoundError,
   ValidationError,
   type ErrorResponse,
-} from "faultguard";
+} from "faultkit";
 
 // ── Pattern 1: Fastify Error Handler ──────────────────────────────────────────
 export function fastifyErrorHandler(error: unknown, _request: any, reply: any) {

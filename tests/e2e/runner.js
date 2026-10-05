@@ -16,7 +16,7 @@ const suiteStressCombined = require("../stress_combined_e2e.test.js");
 
 async function runAll() {
   console.log("============================================================");
-  console.log("   RUNNING ALL END-TO-END (E2E) & STRESS TESTS FOR FAULTGUARD");
+  console.log("   RUNNING ALL END-TO-END (E2E) & STRESS TESTS FOR FAULTKIT");
   console.log("============================================================");
 
   let totalFailures = 0;

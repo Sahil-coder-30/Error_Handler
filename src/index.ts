@@ -40,6 +40,7 @@ export {
   DEFAULT_REDACT_KEYS,
   type Logger,
   type LogLevel,
+  type FaultKitLoggerOptions,
   type FaultGuardLoggerOptions,
 } from "./logger.js";
 

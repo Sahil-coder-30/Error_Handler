@@ -1,6 +1,6 @@
 /**
  * @file tests/cli.test.js
- * @description Unit and integration tests for the FaultGuard CLI (bin/faultguard.js).
+ * @description Unit and integration tests for the FaultKit CLI (bin/faultkit.js).
  */
 
 "use strict";
@@ -23,11 +23,12 @@ function assert(cond, name, context = "") {
   }
 }
 
-const CLI_PATH = path.resolve(__dirname, "..", "bin", "faultguard.js");
+const CLI_PATH = path.resolve(__dirname, "..", "bin", "faultkit.js");
+const LEGACY_CLI_PATH = path.resolve(__dirname, "..", "bin", "faultguard.js");
 
-function runCli(args, cwd = process.cwd()) {
+function runCli(args, cwd = process.cwd(), script = CLI_PATH) {
   try {
-    const stdout = execSync(`node "${CLI_PATH}" ${args}`, {
+    const stdout = execSync(`node "${script}" ${args}`, {
       cwd,
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
@@ -43,7 +44,7 @@ function runCli(args, cwd = process.cwd()) {
 }
 
 function run() {
-  console.log("\n🛠️  Testing FaultGuard CLI");
+  console.log("\n🛠️  Testing FaultKit CLI");
   console.log("─────────────────────────────────────────────────────────────\n");
 
   // 1. Version flag
@@ -56,6 +57,10 @@ function run() {
     const res2 = runCli("version");
     assert(res2.status === 0, "version command exits with code 0");
     assert(res2.stdout.trim().startsWith("v1."), "version command outputs version");
+
+    const resLegacy = runCli("--version", process.cwd(), LEGACY_CLI_PATH);
+    assert(resLegacy.status === 0, "legacy faultguard CLI alias exits with 0");
+    assert(resLegacy.stdout.trim().startsWith("v1."), "legacy CLI outputs version");
   }
 
   // 2. Help flag
@@ -63,7 +68,7 @@ function run() {
   {
     const res = runCli("--help");
     assert(res.status === 0, "--help exits with code 0");
-    assert(res.stdout.includes("npx faultguard <command>"), "Usage includes command syntax");
+    assert(res.stdout.includes("npx faultkit <command>"), "Usage includes command syntax");
     assert(res.stdout.includes("init"), "Help lists 'init' command");
     assert(res.stdout.includes("info"), "Help lists 'info' command");
   }
@@ -74,7 +79,7 @@ function run() {
     const res = runCli("info");
     assert(res.status === 0, "info exits with code 0");
     assert(res.stdout.includes("Guaranteed OpenAPI Error Shape"), "Outputs OpenAPI schema contract");
-    assert(res.stdout.includes("faultguard/express"), "Outputs Express subpath export");
+    assert(res.stdout.includes("faultkit/express"), "Outputs Express subpath export");
   }
 
   // 4. Unknown command
@@ -88,24 +93,24 @@ function run() {
   // 5. Init command in a clean temp directory
   console.log("\n📋 [5] init command in isolated directory");
   {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "faultguard-cli-test-"));
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "faultkit-cli-test-"));
 
     try {
       // 5a: Dry run
       const dryRes = runCli("init --dry-run", tempDir);
       assert(dryRes.status === 0, "init --dry-run exits with 0");
       assert(dryRes.stdout.includes("Dry-Run"), "Identifies dry-run mode");
-      const expectedSkillPath = path.join(tempDir, ".agents", "skills", "faultguard", "SKILL.md");
+      const expectedSkillPath = path.join(tempDir, ".agents", "skills", "faultkit", "SKILL.md");
       assert(!fs.existsSync(expectedSkillPath), "Dry run does not create file on disk");
 
-      // 5b: Standard init (installs .agents/skills/faultguard/SKILL.md)
+      // 5b: Standard init (installs .agents/skills/faultkit/SKILL.md)
       const initRes = runCli("init", tempDir);
       assert(initRes.status === 0, "init exits with 0");
       assert(initRes.stdout.includes("[Created]"), "Reports created file");
       assert(fs.existsSync(expectedSkillPath), "SKILL.md is created on disk");
 
       const content = fs.readFileSync(expectedSkillPath, "utf8");
-      assert(content.includes("name: faultguard"), "Skill content has correct frontmatter");
+      assert(content.includes("name: faultkit"), "Skill content has correct frontmatter");
       assert(content.includes("Agent Decision Tree"), "Skill contains decision tree");
 
       // 5c: Idempotent re-run
@@ -116,7 +121,7 @@ function run() {
       // 5d: Target Cursor
       const cursorRes = runCli("init --target cursor", tempDir);
       assert(cursorRes.status === 0, "init --target cursor exits with 0");
-      const cursorRulePath = path.join(tempDir, ".cursor", "rules", "faultguard.mdc");
+      const cursorRulePath = path.join(tempDir, ".cursor", "rules", "faultkit.mdc");
       assert(fs.existsSync(cursorRulePath), "Cursor MDC rule created");
       const cursorContent = fs.readFileSync(cursorRulePath, "utf8");
       assert(cursorContent.includes("globs:"), "Cursor rule has globs in frontmatter");
@@ -141,7 +146,7 @@ function run() {
 
 if (require.main === module) {
   const code = run();
-  process.exit(code);
+  process.exit(code === 0 ? 0 : 1);
 }
 
 module.exports = { run };
