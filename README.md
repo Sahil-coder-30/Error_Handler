@@ -168,6 +168,22 @@ Every non-2xx response emitted by FaultKit middleware adheres to this exact cont
 > throw new ValidationError(zodErrors, "Validation failed");
 > ```
 
+### Built-in Logger & Observability API
+FaultKit exports a battle-tested, pre-hardened Pino logger pre-configured with ISO-8601 timestamps, automatic credential redaction, and `AppError` serialization:
+
+```typescript
+import { logger, createLogger, createAppErrorSerializer, DEFAULT_REDACT_KEYS } from "faultkit";
+// Also accessible via direct subpath export:
+// import { logger } from "faultkit/logger";
+```
+
+| Export | Type | Description |
+|---|---|---|
+| `logger` | `Logger` (Pino) | Ready-to-use singleton logger with ISO-8601 formatting, credential redaction, and Loki tags. |
+| `createLogger(options)` | `(options?: FaultKitLoggerOptions) => Logger` | Factory function to create custom microservice loggers. |
+| `createAppErrorSerializer()` | `(options?) => (err: unknown) => Record<string, unknown>` | Pino error serializer that extracts status code, error code, operational state, details, and stack. |
+| `DEFAULT_REDACT_KEYS` | `string[]` | Default list of sensitive keys automatically redacted (`authorization`, `cookie`, `password`, `token`, `secret`, `apiKey`, `creditCard`). |
+
 ---
 
 ## 6. Configuration Options

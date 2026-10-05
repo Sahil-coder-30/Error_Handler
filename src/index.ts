@@ -3,7 +3,7 @@
  * @description Main public entry point for the framework-agnostic core.
  *
  * Intentionally does NOT export Express utilities — those live in `src/express.ts`
- * and are accessed via the `faultguard/express` sub-path export.
+ * and are accessed via the `faultkit/express` sub-path export.
  *
  * This keeps non-Express consumers (Fastify, Hono, Lambda, etc.) from pulling
  * in any Express types or peer dependency references.

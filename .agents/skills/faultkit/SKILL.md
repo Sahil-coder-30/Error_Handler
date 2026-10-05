@@ -121,6 +121,31 @@ All error classes extend `AppError` and are imported from `"faultkit"`.
 > throw new ValidationError("Validation failed", result.error.flatten().fieldErrors);
 > ```
 
+### Logger & Observability Reference
+
+FaultKit provides a zero-config, pre-hardened Pino logger optimized for cloud log aggregators (Grafana Loki, Datadog, AWS CloudWatch).
+
+Available from root `"faultkit"` or subpath export `"faultkit/logger"`:
+
+| Export | Type | Description |
+|---|---|---|
+| `logger` | `Logger` (Pino) | Ready-to-use singleton configured with ISO-8601 timestamps, AppError serializer, and credential redaction. |
+| `createLogger(options)` | `(options?: FaultKitLoggerOptions) => Logger` | Factory to instantiate custom service loggers with microservice name, custom log levels, and custom redact keys. |
+| `createAppErrorSerializer()` | `(options?) => (err: unknown) => Record<string, unknown>` | Custom Pino error serializer that extracts `statusCode`, `errorCode`, `isOperational`, `details`, and `stack`. |
+| `DEFAULT_REDACT_KEYS` | `string[]` | Default array of sensitive fields automatically redacted (`authorization`, `cookie`, `password`, `token`, etc.). |
+
+#### `FaultKitLoggerOptions`
+```typescript
+interface FaultKitLoggerOptions {
+  service?: string;            // Service name for Loki filtering (default: process.env.SERVICE_NAME || 'api')
+  level?: LogLevel;            // 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent' (default: 'info')
+  redact?: string[];           // Property paths to sanitize (default: DEFAULT_REDACT_KEYS)
+  base?: Record<string, any>;  // Base fields merged into every log entry
+  includeStackInLog?: boolean; // Whether to serialize stack traces (default: true)
+  destination?: DestinationStream; // Custom writable output stream
+}
+```
+
 ---
 
 ## Guaranteed OpenAPI Response Envelope
