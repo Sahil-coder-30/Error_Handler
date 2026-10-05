@@ -29,8 +29,8 @@
     "microservices"
   ],
   "bin": {
-    "faultkit": "./bin/faultkit.js",
-    "faultguard": "./bin/faultguard.js"
+    "faultkit": "bin/faultkit.js",
+    "faultguard": "bin/faultguard.js"
   },
   "files": [
     "dist",
