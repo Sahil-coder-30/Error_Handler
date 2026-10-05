@@ -1,0 +1,93 @@
+{
+  "name": "faultguard",
+  "version": "1.0.0",
+  "description": "A framework-agnostic, OpenAPI-compliant custom error handling package for TypeScript backends.",
+  "author": "Your Name",
+  "license": "MIT",
+  "keywords": [
+    "error-handler",
+    "typescript",
+    "express",
+    "openapi",
+    "pino",
+    "grafana-loki",
+    "structured-logging",
+    "agent-native",
+    "agent-skills",
+    "ai-ready",
+    "monorepo",
+    "microservices"
+  ],
+  "bin": {
+    "faultguard": "./bin/faultguard.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "skills",
+    "examples"
+  ],
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "types": "./dist/types/index.d.ts"
+    },
+    "./express": {
+      "import": "./dist/esm/express.js",
+      "require": "./dist/cjs/express.js",
+      "types": "./dist/types/express.d.ts"
+    },
+    "./logger": {
+      "import": "./dist/esm/logger.js",
+      "require": "./dist/cjs/logger.js",
+      "types": "./dist/types/logger.d.ts"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "npm run build:cjs && npm run build:esm && npm run build:types",
+    "build:cjs": "tsc -p tsconfig.cjs.json && node -e \"require('fs').writeFileSync('./dist/cjs/package.json', JSON.stringify({type:'commonjs'},null,2))\"",
+    "build:esm": "tsc -p tsconfig.esm.json && node -e \"require('fs').writeFileSync('./dist/esm/package.json', JSON.stringify({type:'module'},null,2))\"",
+    "build:types": "tsc -p tsconfig.types.json",
+    "clean": "rm -rf dist",
+    "prebuild": "npm run clean",
+    "dev": "tsc -p tsconfig.cjs.json --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.types.json",
+    "test": "npm run test:unit && npm run test:cli && npm run test:e2e",
+    "test:unit": "node tests/unit.js",
+    "test:cli": "node tests/cli.test.js",
+    "test:e2e": "node tests/e2e/runner.js",
+    "test:logger": "node tests/logger.test.js",
+    "test:stress": "node tests/stress_logger_standalone.test.js && node tests/stress_errorhandler_standalone.test.js && node tests/stress_combined_e2e.test.js",
+    "test:stress:logger": "node tests/stress_logger_standalone.test.js",
+    "test:stress:handler": "node tests/stress_errorhandler_standalone.test.js",
+    "test:stress:combined": "node tests/stress_combined_e2e.test.js",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "express": "^4.22.3",
+    "typescript": "^5.5.0"
+  },
+  "peerDependencies": {
+    "express": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "express": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "pino": "^10.4.0"
+  }
+}
