@@ -295,7 +295,17 @@ async function run() {
       assert(sampleErrorLog.err !== undefined, "Log contains structured err object with stack");
     }
   } finally {
-    await new Promise((r) => server.close(r));
+    try { httpAgent.destroy(); } catch {}
+    if (typeof server.closeAllConnections === "function") {
+      try { server.closeAllConnections(); } catch {}
+    }
+    await new Promise((r) => {
+      const timer = setTimeout(r, 1000);
+      server.close(() => {
+        clearTimeout(timer);
+        r();
+      });
+    });
   }
 
   console.log("\n────────────────────────────────────────────────────────────");

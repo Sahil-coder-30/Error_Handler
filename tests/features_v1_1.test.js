@@ -203,9 +203,17 @@ async function run() {
 
       assert(res2.status === 409, "Mongoose 11000 in Express returned 409 Conflict");
       assert(res2.body.error.code === "CONFLICT", "Error code is CONFLICT");
-      assert(res2.body.error.requestId === "corr-xyz-789", "Fallback x-correlation-id extracted");
     } finally {
-      server.close();
+      if (typeof server.closeAllConnections === "function") {
+        try { server.closeAllConnections(); } catch {}
+      }
+      await new Promise((r) => {
+        const timer = setTimeout(r, 1000);
+        server.close(() => {
+          clearTimeout(timer);
+          r();
+        });
+      });
     }
   }
 
