@@ -1,7 +1,5 @@
----
-name: faultkit
-description: Use when implementing, refactoring, or debugging backend error handling, HTTP status codes, OpenAPI error responses, Express error middleware, or Pino structured logging. Trigger on mentions of 'custom error', 'handle error', 'AppError', 'validation error', 'NotFoundError', 'createExpressErrorHandler', 'faultguard', or 'faultkit'.
----
+<!-- BEGIN FAULTKIT INSTRUCTIONS -->
+# FaultKit Error Handling Guidelines
 
 # FaultKit Skill
 
@@ -76,14 +74,8 @@ What is the task?
 │   ├── Microservice-specific configuration? ──> USE: createLogger(options) from "faultkit"
 │   └── Logging caught error? ──> USE: logger.error({ err }, "context message")
 │
-├── 4. Initializing agent configuration in a workspace?
-│   └── RUN: npx faultkit init --help
-│
-└── 5. Frontend error consumption & client interceptors?
-    ├── Guaranteed contract: { success: false, error: { code, message, details, requestId }, requestId }
-    ├── Axios / Fetch interceptor: toast error.message, map error.details to form inputs on VALIDATION_ERROR
-    ├── Auth session cleanup: redirect to login on UNAUTHORIZED or TOKEN_EXPIRED
-    └── User support & tracing: show error.requestId; dev looks up in Loki: {service="api"} |= "<requestId>"
+└── 4. Initializing agent configuration in a workspace?
+    └── RUN: npx faultkit init --help
 ```
 
 ### Absolute Rules (NEVER & PREFER)
@@ -308,45 +300,6 @@ channel.consume("task_queue", async (msg) => {
 });
 ```
 
-### Recipe 7: Universal Frontend Error Parsing (Axios / Fetch)
-FaultKit guarantees that 100% of error responses follow this OpenAPI schema:
-`{ success: false, error: { code, message, details, requestId }, requestId }`
-
-```typescript
-// Universal Axios response interceptor for React, Next.js, Vue, Svelte
-api.interceptors.response.use(
-  (res) => res,
-  (axiosError) => {
-    const errorData = axiosError.response?.data?.error;
-    if (!errorData) {
-      toast.error("Network or connection error. Please try again.");
-      return Promise.reject(axiosError);
-    }
-
-    // 1. Toast Notification (500 crashes are safely masked in production)
-    toast.error(errorData.message);
-
-    // 2. Form Field Errors (map directly to React Hook Form / Formik fields)
-    if (errorData.code === "VALIDATION_ERROR" && errorData.details) {
-      setFormErrors(errorData.details);
-    }
-
-    // 3. Auth Redirection
-    if (errorData.code === "UNAUTHORIZED" || errorData.code === "TOKEN_EXPIRED") {
-      localStorage.removeItem("auth_token");
-      window.location.href = "/login";
-    }
-
-    // 4. Observability & Support (User quotes ID; backend searches Loki)
-    if (errorData.requestId) {
-      console.error(`[FaultKit] Support Reference ID: ${errorData.requestId}`);
-    }
-
-    return Promise.reject(errorData);
-  }
-);
-```
-
 ---
 
 ## Anti-Patterns Checklist
@@ -368,3 +321,5 @@ FaultKit includes a safe, zero-dependency CLI. Run with `--help` first:
 - `npx faultkit init --help` — Configure AI agent skills (.agents, Cursor, Copilot, Claude).
 - `npx faultkit info` — Inspect OpenAPI contract and exported subpaths.
 - `npx faultkit --version` — Print installed version (v1.1.0).
+
+<!-- END FAULTKIT INSTRUCTIONS -->

@@ -22,7 +22,7 @@ Trigger this skill whenever the user or task involves:
 
 ## When NOT to use this skill
 
-- Frontend-only code (React, Vue, Svelte) — FaultKit is a backend runtime library.
+- Frontend-only UI code (React, Vue, Svelte) — FaultKit is a backend runtime library (though frontend clients consume its standardized OpenAPI response schema via universal Axios/Fetch interceptors; see `examples/05-frontend-integration`).
 - GraphQL APIs where errors must follow GraphQL execution spec (`errors: [{ message, locations, path }]`).
 - gRPC services where responses require gRPC status codes rather than HTTP status codes.
 - Simple standalone scripts where `console.error` and `process.exit(1)` are sufficient.
@@ -76,8 +76,14 @@ What is the task?
 │   ├── Microservice-specific configuration? ──> USE: createLogger(options) from "faultkit"
 │   └── Logging caught error? ──> USE: logger.error({ err }, "context message")
 │
-└── 4. Initializing agent configuration in a workspace?
-    └── RUN: npx faultkit init --help
+├── 4. Initializing agent configuration in a workspace?
+│   └── RUN: npx faultkit init --help
+│
+└── 5. Frontend error consumption & client interceptors?
+    ├── Guaranteed contract: { success: false, error: { code, message, details, requestId }, requestId }
+    ├── Axios / Fetch interceptor: toast error.message, map error.details to form inputs on VALIDATION_ERROR
+    ├── Auth session cleanup: redirect to login on UNAUTHORIZED or TOKEN_EXPIRED
+    └── User support & tracing: show error.requestId; dev looks up in Loki: {service="api"} |= "<requestId>"
 ```
 
 ### Absolute Rules (NEVER & PREFER)
@@ -300,6 +306,45 @@ channel.consume("task_queue", async (msg) => {
     logger.error({ err, envelope }, "Task worker error");
   }
 });
+```
+
+### Recipe 7: Universal Frontend Error Parsing (Axios / Fetch)
+FaultKit guarantees that 100% of error responses follow this OpenAPI schema:
+`{ success: false, error: { code, message, details, requestId }, requestId }`
+
+```typescript
+// Universal Axios response interceptor for React, Next.js, Vue, Svelte
+api.interceptors.response.use(
+  (res) => res,
+  (axiosError) => {
+    const errorData = axiosError.response?.data?.error;
+    if (!errorData) {
+      toast.error("Network or connection error. Please try again.");
+      return Promise.reject(axiosError);
+    }
+
+    // 1. Toast Notification (500 crashes are safely masked in production)
+    toast.error(errorData.message);
+
+    // 2. Form Field Errors (map directly to React Hook Form / Formik fields)
+    if (errorData.code === "VALIDATION_ERROR" && errorData.details) {
+      setFormErrors(errorData.details);
+    }
+
+    // 3. Auth Redirection
+    if (errorData.code === "UNAUTHORIZED" || errorData.code === "TOKEN_EXPIRED") {
+      localStorage.removeItem("auth_token");
+      window.location.href = "/login";
+    }
+
+    // 4. Observability & Support (User quotes ID; backend searches Loki)
+    if (errorData.requestId) {
+      console.error(`[FaultKit] Support Reference ID: ${errorData.requestId}`);
+    }
+
+    return Promise.reject(errorData);
+  }
+);
 ```
 
 ---
