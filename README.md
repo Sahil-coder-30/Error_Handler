@@ -2,7 +2,7 @@
 
 > Production-grade, OpenAPI-compliant error handling and Grafana/Loki-ready structured logging for TypeScript and Node.js.
 
-[![CI](https://github.com/Sahil-coder-30/Error_Handler/actions/workflows/ci.yml/badge.svg)](https://github.com/Sahil-coder-30/Error_Handler/actions/workflows/ci.yml)
+[![CI](https://github.com/Sahil-coder-30/Error_Handler/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Sahil-coder-30/Error_Handler/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/faultkit.svg)](https://www.npmjs.com/package/faultkit)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
