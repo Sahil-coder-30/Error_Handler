@@ -90,21 +90,20 @@ Mount `createExpressErrorHandler()` as the **last middleware** in your Express a
 
 ```typescript
 import express from "express";
-import { createExpressErrorHandler } from "faultkit/express";
+import { createExpressErrorHandler, createNotFoundHandler, asyncHandler } from "faultkit/express";
 import { getUser, validateCreateUser } from "./userService.js";
 
 const app = express();
 app.use(express.json());
 
-// Routes
-app.get("/users/:id", async (req, res, next) => {
-  try {
-    const user = await getUser(req.params.id);
-    res.json({ success: true, data: user });
-  } catch (err) {
-    next(err);
-  }
-});
+// Routes. asyncHandler forwards rejected promises to the error handler (needed in Express 4).
+app.get("/users/:id", asyncHandler(async (req, res) => {
+  const user = await getUser(req.params.id);
+  res.json({ success: true, data: user });
+}));
+
+// Unmatched routes return the JSON contract (404 NOT_FOUND) instead of an HTML page
+app.use(createNotFoundHandler());
 
 // Centralized error handler MUST be placed AFTER all routes
 app.use(createExpressErrorHandler());
@@ -118,7 +117,7 @@ Log application events with the pre-configured Pino logger:
 ```typescript
 import { logger } from "faultkit";
 
-logger.info("Order processed successfully", { orderId: "ord_102" });
+logger.info({ orderId: "ord_102" }, "Order processed successfully");
 
 // Always pass { err } so FaultKit automatically extracts status and error codes
 logger.error({ err }, "Payment capture failed");
@@ -137,31 +136,54 @@ Every non-2xx response emitted by FaultKit middleware adheres to this exact cont
   "error": {
     "code": "NOT_FOUND",
     "message": "User with ID 'usr_123' was not found.",
-    "details": null
-  }
+    "details": null,
+    "requestId": "req_8492048"
+  },
+  "requestId": "req_8492048"
 }
 ```
 
 - **`code`**: Machine-readable string enum (e.g. `"BAD_REQUEST"`, `"VALIDATION_ERROR"`, `"NOT_FOUND"`).
 - **`message`**: Human-readable explanation.
-- **`details`**: Structured validation map (or `null`).
+- **`details`**: Structured validation map (or `null`). Always JSON-safe (BigInt, Map, Set, Date and cycles are handled).
+- **`requestId`**: Present only when a request ID is known (see `includeRequestId`).
 
 ### Concrete Error Classes
 
-| Class | HTTP Status | Error Code (`ErrorCode.*`) | Constructor Signature | `isOperational` |
-|---|---|---|---|---|
-| `BadRequestError` | 400 | `BAD_REQUEST` | `(message?: string, details?: unknown)` | `true` |
-| `ValidationError` | 400 | `VALIDATION_ERROR` | `(details: unknown, message?: string)` | `true` |
-| `UnauthorizedError` | 401 | `UNAUTHORIZED` | `(message?: string)` | `true` |
-| `TokenExpiredError` | 401 | `TOKEN_EXPIRED` | `(message?: string)` | `true` |
-| `TokenInvalidError` | 401 | `TOKEN_INVALID` | `(message?: string)` | `true` |
-| `ForbiddenError` | 403 | `FORBIDDEN` | `(message?: string)` | `true` |
-| `NotFoundError` | 404 | `NOT_FOUND` | `(message?: string)` | `true` |
-| `ConflictError` | 409 | `CONFLICT` | `(message?: string, details?: unknown)` | `true` |
-| `UnprocessableEntityError` | 422 | `UNPROCESSABLE_ENTITY` | `(message?: string, details?: unknown)` | `true` |
-| `RateLimitError` | 429 | `RATE_LIMIT_EXCEEDED` | `(message?: string)` | `true` |
-| `InternalServerError` | 500 | `INTERNAL_SERVER_ERROR` | `(message?: string, details?: unknown)` | `false` |
-| `ServiceUnavailableError` | 503 | `SERVICE_UNAVAILABLE` | `(message?: string)` | `false` |
+Every class takes `(message?, details?, options?)`, where `options` is `{ cause?: unknown }`.
+The only exception is `ValidationError`, which takes `(details, message?, options?)`.
+
+| Class | HTTP Status | Error Code (`ErrorCode.*`) | `isOperational` |
+|---|---|---|---|
+| `BadRequestError` | 400 | `BAD_REQUEST` | `true` |
+| `ValidationError` | 400 | `VALIDATION_ERROR` | `true` |
+| `UnauthorizedError` | 401 | `UNAUTHORIZED` | `true` |
+| `TokenExpiredError` | 401 | `TOKEN_EXPIRED` | `true` |
+| `TokenInvalidError` | 401 | `TOKEN_INVALID` | `true` |
+| `ForbiddenError` | 403 | `FORBIDDEN` | `true` |
+| `NotFoundError` | 404 | `NOT_FOUND` | `true` |
+| `ConflictError` | 409 | `CONFLICT` | `true` |
+| `UnprocessableEntityError` | 422 | `UNPROCESSABLE_ENTITY` | `true` |
+| `RateLimitError` | 429 | `RATE_LIMIT_EXCEEDED` | `true` |
+| `InternalServerError` | 500 | `INTERNAL_SERVER_ERROR` | `false` |
+| `MessageProcessingFailedError` | 500 | `MESSAGE_PROCESSING_FAILED` | `false` |
+| `BadGatewayError` | 502 | `BAD_GATEWAY` | `false` |
+| `ServiceUnavailableError` | 503 | `SERVICE_UNAVAILABLE` | `false` |
+| `GatewayTimeoutError` | 504 | `GATEWAY_TIMEOUT` | `false` |
+| `ContextWindowExceededError` | 400 | `CONTEXT_WINDOW_EXCEEDED` | `true` |
+| `ContentFilteredError` | 400 | `CONTENT_FILTERED` | `true` |
+| `InsufficientCreditsError` | 402 | `INSUFFICIENT_CREDITS` | `true` |
+| `ModelNotFoundError` | 404 | `MODEL_NOT_FOUND` | `true` |
+| `ModelRateLimitError` | 429 | `MODEL_RATE_LIMIT` | `true` |
+| `LlmProviderDownError` | 503 | `LLM_PROVIDER_DOWN` | `false` |
+
+Wrap a low-level failure without losing it:
+
+```typescript
+throw new ServiceUnavailableError("Billing is unavailable.", null, { cause: err });
+```
+
+The `cause` is logged (message and stack) but never sent to the client.
 
 > ⚠️ **Important Signature Notice for `ValidationError`:**
 > `ValidationError` accepts `details` as its **first** parameter and `message` as its **second** parameter:
@@ -182,8 +204,23 @@ import { logger, createLogger, createAppErrorSerializer, DEFAULT_REDACT_KEYS } f
 |---|---|---|
 | `logger` | `Logger` (Pino) | Ready-to-use singleton logger with ISO-8601 formatting, credential redaction, and Loki tags. |
 | `createLogger(options)` | `(options?: FaultKitLoggerOptions) => Logger` | Factory function to create custom microservice loggers. |
-| `createAppErrorSerializer()` | `(options?) => (err: unknown) => Record<string, unknown>` | Pino error serializer that extracts status code, error code, operational state, details, and stack. |
+| `createAppErrorSerializer(includeStack?)` | `(includeStack?: boolean \| { includeStack?: boolean }) => (err: unknown) => Record<string, unknown>` | Pino error serializer that extracts status code, error code, operational state, details, and stack. |
 | `DEFAULT_REDACT_KEYS` | `string[]` | Default list of sensitive keys automatically redacted (`authorization`, `cookie`, `password`, `token`, `secret`, `apiKey`, `creditCard`). |
+
+### Formatting Helpers
+
+| Export | Description |
+|---|---|
+| `toHttpResponse(err, options?)` | Returns `{ statusCode, body, error }`. Use it in Fastify, Hono, Koa, Lambda or Next.js. |
+| `toErrorResponse(err, options?)` / `formatError` | Returns only the JSON body. Use it for WebSockets and queues. |
+| `coerceToAppError(err, coercer?)` | Normalizes any thrown value into an `AppError`. Never throws. |
+| `errorCodeFromStatus(status)` | Maps an HTTP status to the closest `ErrorCode`. |
+| `sanitizeDetails(value)` | Makes any value JSON-safe (BigInt, cycles, Map, Set, Error, hostile getters). |
+| `normalizeRequestId(value)` | Validates an untrusted request ID. Returns `undefined` if unsafe. |
+
+`options` for both formatters: `{ isProduction?, genericServerErrorMessage?, requestId?, errorCoercer? }`.
+
+> `err.toJSON()` is a raw serializer and does NOT mask 5xx messages. Send `toHttpResponse(err).body` to clients instead.
 
 ---
 
@@ -197,24 +234,38 @@ import { createExpressErrorHandler } from "faultkit/express";
 
 app.use(
   createExpressErrorHandler({
-    // Custom logger instance (defaults to FaultKit's built-in Pino logger)
+    // Custom logger instance (defaults to FaultKit's built-in Pino logger).
+    // Pino, Bunyan, Winston and console are detected automatically. Pass false to disable.
     logger: customLogger,
+
+    // Force argument order if auto-detection is wrong: "auto" | "object-first" | "message-first"
+    loggerStyle: "auto",
+
+    // Mask non-operational messages and details (Default: NODE_ENV === "production", checked per request)
+    isProduction: true,
 
     // Masked message sent to clients for non-operational 5xx errors in production
     // Default: "An unexpected error occurred. Our team has been notified."
     genericServerErrorMessage: "Internal server error. Please try again later.",
 
-    // Custom error coercion hook to map Mongoose, Prisma, or proprietary library errors
+    // Custom error coercion hook for proprietary library errors. Must be synchronous.
+    // (Mongoose, MongoDB, Prisma, Zod, Joi and http-errors are already handled.)
     errorCoercer: (err) => {
-      if (err?.code === "P2002") return new ConflictError("Database record already exists.");
+      if (err?.type === "StripeCardError") return new ConflictError("The card was declined.");
     },
 
     // Whether to extract and include a distributed correlation ID in logs and responses
     // Default: true
     includeRequestId: true,
 
-    // Header name to extract correlation ID from (Default: 'x-request-id')
+    // Header name to extract correlation ID from, and to echo it in (Default: 'x-request-id')
     requestIdHeader: "x-request-id",
+
+    // Generate a UUID when the request has no valid ID (Default: false). A function is also accepted.
+    generateRequestId: true,
+
+    // Called once per handled error, e.g. to report to Sentry. Errors thrown here are ignored.
+    onError: (appError, req, originalError) => Sentry.captureException(originalError),
 
     // Whether to print stack traces in server-side logs
     // Default: process.env.NODE_ENV !== "production"
@@ -239,13 +290,15 @@ const logger = createLogger({
   // Custom property paths to redact (defaults to DEFAULT_REDACT_KEYS)
   redact: ["req.headers.authorization", "password", "token", "creditCard"],
 
-  // Custom base properties or null to remove pid/hostname
+  // Extra base fields. Defaults are pid, hostname and service. null keeps only service.
   base: { env: process.env.NODE_ENV },
 
   // Include stack traces when serializing errors (Default: true)
   includeStackInLog: true,
 });
 ```
+
+An unknown `level` (for example a typo in `LOG_LEVEL`) falls back to `"info"` with a warning instead of crashing at import time. Logging never throws: hostile getters, circular data and frozen errors are handled, even after `logger.level` changes and in child loggers.
 
 ---
 
@@ -256,7 +309,7 @@ The Express adapter is isolated under the `"faultkit/express"` subpath export to
 
 ```typescript
 import express from "express";
-import { createExpressErrorHandler } from "faultkit/express";
+import { createExpressErrorHandler, createNotFoundHandler } from "faultkit/express";
 
 const app = express();
 app.use(express.json());
@@ -264,58 +317,41 @@ app.use(express.json());
 // Routes...
 // (In Express 4, pass async errors to next(err); in Express 5, unhandled promise rejections are handled automatically)
 
-// Mount error handler LAST
+// Unmatched routes → JSON 404, then the error handler LAST
+app.use(createNotFoundHandler());
 app.use(createExpressErrorHandler());
 ```
 
 ### Fastify
-Use FaultKit error classes and the built-in `.toJSON()` serialization:
+`toHttpResponse` gives you the status code and the masked body in one call:
 
 ```typescript
 import Fastify from "fastify";
-import { AppError } from "faultkit";
+import { toHttpResponse, logger } from "faultkit";
 
 const fastify = Fastify();
 
 fastify.setErrorHandler((error, request, reply) => {
-  if (error instanceof AppError) {
-    reply.status(error.statusCode).send(error.toJSON());
-    return;
-  }
-  reply.status(500).send({
-    success: false,
-    error: {
-      code: "INTERNAL_SERVER_ERROR",
-      message: "An unexpected error occurred.",
-      details: null,
-    },
-  });
+  const { statusCode, body, error: appError } = toHttpResponse(error, { requestId: request.id });
+  logger[statusCode >= 500 ? "error" : "warn"]({ err: appError, requestId: request.id }, "Request failed");
+  reply.status(statusCode).send(body);
 });
 ```
 
 ### AWS Lambda / Hono / Serverless
 ```typescript
-import { AppError } from "faultkit";
+import { toHttpResponse } from "faultkit";
 
 export async function handler(event: any) {
   try {
     const data = await processEvent(event);
     return { statusCode: 200, body: JSON.stringify({ success: true, data }) };
   } catch (err) {
-    if (err instanceof AppError) {
-      return {
-        statusCode: err.statusCode,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(err.toJSON()),
-      };
-    }
+    const { statusCode, body } = toHttpResponse(err, { requestId: event.requestContext?.requestId });
     return {
-      statusCode: 500,
+      statusCode,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        success: false,
-        error: { code: "INTERNAL_SERVER_ERROR", message: "Server error", details: null },
-      }),
+      body: JSON.stringify(body),
     };
   }
 }
@@ -543,11 +579,30 @@ Complete, runnable examples are provided in the [`examples/`](./examples) direct
 
 ## 11. Error Handling & Edge Cases
 
-### Automatic 3rd-Party Error Coercion
-If a third-party library throws an error with a `.status` or `.statusCode` property (such as `body-parser` throwing a syntax error on malformed JSON with status 400), FaultKit automatically:
-- Maps the status code to the appropriate `ErrorCode` (e.g. `BAD_REQUEST`).
-- Treats 4xx library errors as **operational** (preserves message).
-- Maps 5xx library errors to `INTERNAL_SERVER_ERROR` with operational safety flags.
+### Automatic Library Error Coercion
+
+| Thrown error | Result |
+|---|---|
+| Mongoose `ValidationError` | 400 `VALIDATION_ERROR`, details `{ field: [messages] }` |
+| Mongoose `CastError` | 400 `BAD_REQUEST` |
+| Mongoose `DocumentNotFoundError` | 404 `NOT_FOUND` |
+| MongoDB duplicate key (11000 / 11001) | 409 `CONFLICT` |
+| Prisma `P2002` / `P2003` | 409 `CONFLICT` |
+| Prisma `P2025` | 404 `NOT_FOUND` |
+| Prisma `P2000` | 400 `BAD_REQUEST` |
+| `ZodError`, Joi `ValidationError` | 400 `VALIDATION_ERROR`, details `{ field: [messages] }` |
+| Any error with `.status` / `.statusCode` (http-errors, body-parser) | Same status, mapped code (`PAYLOAD_TOO_LARGE`, `METHOD_NOT_ALLOWED`, ...) |
+| `AppError` from another copy of faultkit (CJS + ESM, monorepos) | Kept as is, `instanceof AppError` still works |
+| Anything else | 500 `INTERNAL_SERVER_ERROR` |
+
+For errors with an HTTP status, 4xx is **operational** (message kept) and 5xx is not (masked in production). An http-errors `expose: false` flag is respected.
+
+Every coerced error keeps the **original stack trace and `cause`**, so logs point at the real throw site.
+
+An `AppError` with an invalid status (`NaN`, `Infinity`, a string, or outside 400-599) becomes a non-operational 500.
+
+### Request ID Safety
+Client-supplied request IDs are trimmed and validated. IDs longer than 256 characters, or containing spaces, quotes, angle brackets or control characters (CRLF), are dropped. Numeric IDs (such as `pino-http`'s default `req.id`) are converted to strings.
 
 ### Adversarial Throws
 JavaScript allows throwing non-Error primitives:
@@ -559,7 +614,7 @@ JavaScript allows throwing non-Error primitives:
 FaultKit safely intercepts all non-Error throws, coerces them to `InternalServerError` (HTTP 500), prevents process crashes, and returns a sanitized JSON response.
 
 ### Streaming Responses & `res.headersSent`
-If response headers were already sent to the client (for example during an SSE stream or file download), FaultKit detects `res.headersSent` and delegates to the default Express handler (`next(err)`) to avoid triggering `ERR_HTTP_HEADERS_SENT`.
+If response headers were already sent to the client (for example during an SSE stream or file download), FaultKit logs the error at `error` level and then delegates to the default Express handler (`next(err)`), which closes the connection, to avoid `ERR_HTTP_HEADERS_SENT`.
 
 ---
 
@@ -580,6 +635,8 @@ FaultKit's logger automatically redacts sensitive parameters using `DEFAULT_REDA
 - `creditCard`, `*.creditCard`
 
 Redacted values appear in logs as `"[REDACTED]"`.
+
+The Express handler logs the request path **without the query string**, because query strings often carry tokens.
 
 ---
 
@@ -616,6 +673,16 @@ npm run test:cli
 
 # Run E2E and chaos test suites
 npm run test:e2e
+
+# Run the v1.2 regression suite
+npm run test:fixes
+
+# Typecheck TypeScript tests and examples
+npm run test:types
+
+# Run adversarial and stress suites
+npm run test:adversarial
+npm run test:stress
 ```
 
 ---
@@ -629,6 +696,8 @@ npm run test:e2e
 | `app.use(createExpressErrorHandler())` registered before routes | Mount `createExpressErrorHandler()` after all routes | Express routes registered after the error middleware will bypass the error handler. |
 | `logger.error(err.message)` | `logger.error({ err }, "Context message")` | Passing `{ err }` invokes FaultKit's Pino serializer, extracting status, code, details, and stack trace. |
 | `new AppError("msg", 400, "BAD_REQUEST")` | `new BadRequestError("msg")` | `AppError` is an abstract class; use concrete subclasses or create your own subclass. |
+| `reply.send(err.toJSON())` for any error | `reply.send(toHttpResponse(err).body)` | `toJSON()` does not mask 5xx messages in production. |
+| `errorCoercer: async (err) => ...` | A synchronous `errorCoercer` | A returned Promise is ignored. |
 | Expecting custom 500 error messages in production | Rely on `warn`/`error` server-side logs | Production message masking deliberately sanitizes 5xx responses for security. |
 
 ---
@@ -636,6 +705,17 @@ npm run test:e2e
 ## 15. Migration & Versioning
 
 - **Version 1.0.0:** Production-ready release supporting Node.js `>= 18.0.0`.
+- **Version 1.2.0:** Bug-fix and hardening release, no breaking changes to the response contract.
+  - Coerced errors keep the original stack trace and `cause`.
+  - `instanceof AppError` works across duplicate package copies (CJS + ESM).
+  - Built-in Prisma, Zod, Joi and Mongoose `DocumentNotFoundError` coercion; more status codes mapped.
+  - `toHttpResponse`, `createNotFoundHandler`, `asyncHandler`, `GatewayTimeoutError`, `BadGatewayError`, `MessageProcessingFailedError`.
+  - Every error class accepts `details` and `{ cause }`.
+  - Express: `isProduction`, `generateRequestId`, `onError`, `loggerStyle`, `logger: false`; Winston detection; `includeStackInLog: false` now really hides stacks; request IDs are validated.
+  - Logger: invalid `LOG_LEVEL` no longer crashes; safety survives level changes; custom `serializers` no longer drop the AppError serializer; default `base` now includes `pid` and `hostname`.
+  - `details` serialization: shared objects are no longer marked `[Circular]`; `JSON.stringify(appError)` with BigInt details no longer throws.
+  - Development mode now shows 500 `details` in Express responses too (matching `toErrorResponse`). Production still hides them.
+  - Types resolve under `moduleResolution: "node"` (`typesVersions`).
 - **Dual Module Compatibility:** Ships dual CJS and ESM builds with complete TypeScript declaration maps (`.d.ts`).
 - **Semantic Versioning:** Breaking changes to the OpenAPI response contract or class signatures will trigger major version increments.
 
@@ -672,21 +752,22 @@ When coding agents evaluate backend logic:
 ## 17. Troubleshooting
 
 ### Issue: `Cannot find module 'faultkit/express'`
-**Fix:** Ensure your `tsconfig.json` has `"moduleResolution": "NodeNext"` or `"Bundler"`, or ensure you are running Node.js `>= 18.0.0`.
+**Fix:** Upgrade to faultkit `>= 1.2.0` (types now resolve under `"node"`, `"node16"`, `"nodenext"` and `"bundler"`), and make sure you are running Node.js `>= 18.0.0`.
 
 ### Issue: `UnhandledPromiseRejection` in Express 4
-**Fix:** In Express 4, async errors must be caught and forwarded with `next(err)`:
+**Fix:** In Express 4, async errors must be forwarded with `next(err)`. Wrap the route with `asyncHandler`:
 ```typescript
-app.get("/items", async (req, res, next) => {
-  try {
-    const items = await fetchItems();
-    res.json({ success: true, data: items });
-  } catch (err) {
-    next(err);
-  }
-});
+import { asyncHandler } from "faultkit/express";
+
+app.get("/items", asyncHandler(async (req, res) => {
+  const items = await fetchItems();
+  res.json({ success: true, data: items });
+}));
 ```
 (In Express 5, unhandled promise rejections are handled automatically by Express).
+
+### Issue: Unmatched routes return an HTML "Cannot GET" page
+**Fix:** Mount `createNotFoundHandler()` after all routes and before `createExpressErrorHandler()`.
 
 ### Issue: Error handler not triggering
 **Fix:** Verify that `app.use(createExpressErrorHandler())` is mounted **after** all route declarations and that your custom middleware doesn't swallow errors in an empty `catch` block.

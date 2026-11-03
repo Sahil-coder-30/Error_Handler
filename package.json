@@ -1,6 +1,6 @@
 {
   "name": "faultkit",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Framework-agnostic, OpenAPI-compliant error handling and cloud-native structured logging (Pino/Loki) for TypeScript and Node.js backends.",
   "author": "Sahil Sharma <sahilsharma3043@gmail.com>",
   "license": "MIT",
@@ -41,22 +41,33 @@
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",
   "types": "./dist/types/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "express": [
+        "./dist/types/express.d.ts"
+      ],
+      "logger": [
+        "./dist/types/logger.d.ts"
+      ]
+    }
+  },
   "exports": {
     ".": {
+      "types": "./dist/types/index.d.ts",
       "import": "./dist/esm/index.js",
-      "require": "./dist/cjs/index.js",
-      "types": "./dist/types/index.d.ts"
+      "require": "./dist/cjs/index.js"
     },
     "./express": {
+      "types": "./dist/types/express.d.ts",
       "import": "./dist/esm/express.js",
-      "require": "./dist/cjs/express.js",
-      "types": "./dist/types/express.d.ts"
+      "require": "./dist/cjs/express.js"
     },
     "./logger": {
+      "types": "./dist/types/logger.d.ts",
       "import": "./dist/esm/logger.js",
-      "require": "./dist/cjs/logger.js",
-      "types": "./dist/types/logger.d.ts"
-    }
+      "require": "./dist/cjs/logger.js"
+    },
+    "./package.json": "./package.json"
   },
   "publishConfig": {
     "access": "public"
@@ -70,10 +81,12 @@
     "prebuild": "npm run clean",
     "dev": "tsc -p tsconfig.cjs.json --watch",
     "typecheck": "tsc --noEmit -p tsconfig.types.json",
-    "test": "npm run test:unit && npm run test:cli && npm run test:e2e",
+    "test:types": "tsc --noEmit --strict --esModuleInterop --skipLibCheck --module NodeNext --moduleResolution NodeNext --target ES2022 tests/adversarial/12_type_level.test.ts tests/express.test.ts tests/index.test.ts examples/01-express-production/server.ts examples/02-structured-logging-tracing/logging.ts examples/03-domain-custom-errors/customErrors.ts examples/04-framework-agnostic/fastify-or-lambda.ts",
+    "test": "npm run test:unit && npm run test:cli && npm run test:e2e && npm run test:fixes",
     "test:unit": "node tests/unit.js",
     "test:cli": "node tests/cli.test.js",
     "test:e2e": "node tests/e2e/runner.js",
+    "test:fixes": "node tests/fixes_v1_2.test.js",
     "test:logger": "node tests/logger.test.js",
     "test:stress": "node tests/stress_logger_standalone.test.js && node tests/stress_errorhandler_standalone.test.js && node tests/stress_combined_e2e.test.js",
     "test:stress:logger": "node tests/stress_logger_standalone.test.js",

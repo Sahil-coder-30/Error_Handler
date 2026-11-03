@@ -16,6 +16,7 @@ import pino, {
   type LoggerOptions as PinoLoggerOptions,
   type LevelWithSilentOrString,
 } from "pino";
+import { hostname } from "node:os";
 import { AppError } from "./AppError.js";
 
 export type Logger = PinoLogger;
@@ -43,13 +44,14 @@ export interface FaultKitLoggerOptions {
 
   /**
    * Extra base properties to merge into every log entry.
-   * Pass `null` to remove default base fields (pid, hostname).
+   * By default every entry carries `pid`, `hostname` and `service`.
+   * Pass `null` to remove `pid` and `hostname` (keeps `service`).
    */
   base?: Record<string, unknown> | null;
 
   /**
    * Whether to include stack traces when serializing errors.
-   * Defaults to true in non-production, or controlled by options.
+   * Defaults to `true`.
    */
   includeStackInLog?: boolean;
 
@@ -141,30 +143,135 @@ export const DEFAULT_REDACT_KEYS = [
   "*.*.Authorization",
 ];
 
+const STANDARD_LEVELS = new Set(["fatal", "error", "warn", "info", "debug", "trace", "silent"]);
+
+/**
+ * Returns a level pino will accept. Unknown levels (for example a typo in the
+ * `LOG_LEVEL` env var) fall back to `"info"` with a process warning, instead
+ * of crashing the app at import time.
+ */
+function resolveLevel(level: unknown, customLevels: unknown, onlyCustom: boolean): string {
+  const custom =
+    customLevels && typeof customLevels === "object" ? Object.keys(customLevels as object) : [];
+  const fallback = onlyCustom && custom.length > 0 ? custom[0] : "info";
+  if (typeof level === "string") {
+    const trimmed = level.trim();
+    if (custom.includes(trimmed)) return trimmed;
+    const normalized = trimmed.toLowerCase();
+    if (custom.includes(normalized)) return normalized;
+    if (!onlyCustom && STANDARD_LEVELS.has(normalized)) return normalized;
+  }
+  if (level !== undefined && level !== "") {
+    try {
+      process.emitWarning(
+        `faultkit: unknown log level ${JSON.stringify(String(level))}; falling back to "${fallback}".`,
+        "FaultKitWarning"
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+  return fallback;
+}
+
+function safeRead(obj: unknown, key: string): unknown {
+  try {
+    return (obj as Record<string, unknown>)[key];
+  } catch {
+    return "[Unreadable Property]";
+  }
+}
+
 /**
  * Creates an error serializer tailored for `AppError` and standard Node.js Errors.
  * Extracts `statusCode`, `errorCode`, `isOperational`, `details`, and `stack`.
+ * Never throws: frozen errors and throwing getters are serialized field by field.
+ *
+ * @param includeStackOrOptions - `false` (or `{ includeStack: false }`) to drop stack traces.
  */
-export function createAppErrorSerializer(includeStack: boolean = true) {
+export function createAppErrorSerializer(
+  includeStackOrOptions: boolean | { includeStack?: boolean } = true
+) {
+  const includeStack =
+    typeof includeStackOrOptions === "object" && includeStackOrOptions !== null
+      ? includeStackOrOptions.includeStack !== false
+      : includeStackOrOptions !== false;
+
   return function errSerializer(err: unknown): Record<string, unknown> {
     if (!err || typeof err !== "object") {
       return { raw: err };
     }
 
-    const stdSerialized = pino.stdSerializers.err(err as Error);
-    const anyErr = err as Record<string, unknown>;
-    const isApp = err instanceof AppError || typeof anyErr.errorCode === "string";
+    let base: Record<string, unknown>;
+    try {
+      base = { ...(pino.stdSerializers.err(err as Error) as unknown as Record<string, unknown>) };
+    } catch {
+      // Frozen or hostile errors: build the basics by hand.
+      const name = safeRead(err, "name");
+      const message = safeRead(err, "message");
+      const stack = safeRead(err, "stack");
+      base = {
+        type: typeof name === "string" ? name : "Error",
+        message: typeof message === "string" ? message : "[Unreadable Message]",
+        ...(typeof stack === "string" ? { stack } : {}),
+      };
+    }
 
-    return {
-      ...stdSerialized,
-      ...(typeof anyErr.statusCode === "number" && { statusCode: anyErr.statusCode }),
-      ...(typeof anyErr.errorCode === "string" && { errorCode: anyErr.errorCode }),
-      ...(typeof anyErr.isOperational === "boolean" && { isOperational: anyErr.isOperational }),
-      ...(anyErr.details !== undefined && anyErr.details !== null && { details: anyErr.details }),
-      ...(!includeStack && { stack: undefined }),
+    const statusCode = safeRead(err, "statusCode");
+    const errorCode = safeRead(err, "errorCode");
+    const isOperational = safeRead(err, "isOperational");
+    const details = safeRead(err, "details");
+    const isApp = err instanceof AppError || typeof errorCode === "string";
+
+    const out: Record<string, unknown> = {
+      ...base,
+      ...(typeof statusCode === "number" ? { statusCode } : {}),
+      ...(typeof errorCode === "string" ? { errorCode } : {}),
+      ...(typeof isOperational === "boolean" ? { isOperational } : {}),
+      ...(details !== undefined && details !== null ? { details } : {}),
       isAppError: isApp,
     };
+    if (!includeStack) delete out.stack;
+    return out;
   };
+}
+
+type LogMethodHook = NonNullable<NonNullable<PinoLoggerOptions["hooks"]>["logMethod"]>;
+
+/**
+ * pino `logMethod` hook that makes every log call crash-proof. It runs for
+ * every level, every child logger, and survives `logger.level` changes.
+ */
+function createSafeLogMethod(userHook?: LogMethodHook): LogMethodHook {
+  return function safeLogMethod(this: PinoLogger, inputArgs: Parameters<LogMethodHook>[0], method, level) {
+    try {
+      if (typeof userHook === "function") {
+        return userHook.call(this, inputArgs, method, level);
+      }
+      return method.apply(this, inputArgs as Parameters<typeof method>);
+    } catch (err) {
+      let reason = "unknown error";
+      try {
+        reason = err instanceof Error ? err.message : String(err);
+      } catch {
+        /* ignore */
+      }
+      const firstString = (inputArgs as unknown[]).find((a) => typeof a === "string");
+      try {
+        return method.call(
+          this,
+          { logSerializationError: reason } as never,
+          (typeof firstString === "string" ? firstString : "[Unserializable Log Entry]") as never
+        );
+      } catch {
+        try {
+          return method.call(this, "[Unserializable Log Entry]" as never);
+        } catch {
+          return undefined;
+        }
+      }
+    }
+  } as LogMethodHook;
 }
 
 /**
@@ -172,7 +279,7 @@ export function createAppErrorSerializer(includeStack: boolean = true) {
  *
  * @example
  * ```ts
- * import { createLogger } from 'faultguard';
+ * import { createLogger } from 'faultkit';
  *
  * export const logger = createLogger({
  *   service: 'order-service',
@@ -181,107 +288,107 @@ export function createAppErrorSerializer(includeStack: boolean = true) {
  * ```
  */
 export function createLogger(
-  options: FaultKitLoggerOptions = {},
+  options?: FaultKitLoggerOptions | null,
   destination?: pino.DestinationStream
 ): Logger {
+  const opts: FaultKitLoggerOptions = options && typeof options === "object" ? options : {};
   const {
     service = process.env.SERVICE_NAME || "api",
-    level = (process.env.LOG_LEVEL as LogLevel) || "info",
     redact = DEFAULT_REDACT_KEYS,
     base,
     includeStackInLog = true,
     destination: optDestination,
-    pinoOptions = {},
-  } = options;
+  } = opts;
+  const pinoOptions: PinoLoggerOptions =
+    opts.pinoOptions && typeof opts.pinoOptions === "object" ? opts.pinoOptions : {};
 
-  const baseConfig: Record<string, unknown> = {
-    service,
-  };
+  const level = resolveLevel(
+    opts.level ?? pinoOptions.level ?? process.env.LOG_LEVEL,
+    pinoOptions.customLevels,
+    pinoOptions.useOnlyCustomLevels === true
+  );
 
-  const finalBase =
+  // Defaults match pino (pid + hostname) plus the service label.
+  // `base: null` keeps only the service label.
+  const finalBase: Record<string, unknown> =
     base === null
-      ? undefined
+      ? { service }
       : {
-          ...baseConfig,
-          ...(base || {}),
+          pid: process.pid,
+          hostname: safeHostname(),
+          service,
+          ...(base && typeof base === "object" ? base : {}),
         };
 
   const targetDestination = destination ?? optDestination;
+  const errSerializer = createAppErrorSerializer(includeStackInLog);
 
   const pinoConfig: PinoLoggerOptions = {
-    level,
     timestamp: pino.stdTimeFunctions.isoTime,
     redact: {
-      paths: redact,
+      paths: Array.isArray(redact) ? redact : DEFAULT_REDACT_KEYS,
       censor: "[REDACTED]",
     },
     base: finalBase,
+    // Raw pino options may override the defaults above...
+    ...pinoOptions,
+    // ...but these are always merged, never replaced.
+    level,
     serializers: {
-      err: createAppErrorSerializer(includeStackInLog),
-      error: createAppErrorSerializer(includeStackInLog),
+      err: errSerializer,
+      error: errSerializer,
       ...(pinoOptions.serializers || {}),
     },
-    ...pinoOptions,
+    hooks: {
+      ...(pinoOptions.hooks || {}),
+      logMethod: createSafeLogMethod(pinoOptions.hooks?.logMethod),
+    },
   };
 
   const rawLogger = targetDestination ? pino(pinoConfig, targetDestination) : pino(pinoConfig);
-  return wrapSafeLogger(rawLogger);
+  return wrapSafeChild(rawLogger);
+}
+
+function safeHostname(): string | undefined {
+  try {
+    return hostname();
+  } catch {
+    return undefined;
+  }
 }
 
 /**
- * Wraps all log methods in safety boundaries so that hostile throwing getters,
- * proxy traps, or broken serialization never crashes the calling thread.
+ * Makes `child()` crash-proof. Pino children inherit from their parent via the
+ * prototype chain, so wrapping the root once covers every descendant.
+ * Log methods are protected by the `logMethod` hook instead.
  */
-function wrapSafeLogger(instance: Logger): Logger {
-  const target = instance as any;
-  const levels = ["fatal", "error", "warn", "info", "debug", "trace"] as const;
+function wrapSafeChild(instance: Logger): Logger {
+  const target = instance as unknown as Record<string, unknown>;
+  const origChild = target.child as (this: Logger, ...args: unknown[]) => Logger;
 
-  for (const lvl of levels) {
-    const orig = target[lvl];
-    target[lvl] = function safeLogMethod(this: any, ...args: unknown[]) {
-      try {
-        return orig.apply(this, args);
-      } catch (err) {
-        try {
-          const errMsg = err instanceof Error ? err.message : String(err);
-          const safeArgs = args.map((a) =>
-            typeof a === "object" && a !== null
-              ? `[Unserializable Payload: ${errMsg}]`
-              : a
-          );
-          return orig.apply(this, safeArgs);
-        } catch {
-          return orig.apply(this, ["[Unserializable Log Entry]"]);
-        }
-      }
-    };
-  }
-
-  const origChild = target.child;
-  target.child = function safeChild(this: any, ...args: unknown[]) {
+  target.child = function safeChild(this: Logger, ...args: unknown[]): Logger {
     try {
-      const childInstance = origChild.apply(this, args);
-      return wrapSafeLogger(childInstance);
+      return origChild.apply(this, args);
     } catch {
       try {
         const safeArgs = args.map((a) => {
-          if (typeof a === "object" && a !== null) {
-            const clean: Record<string, unknown> = {};
-            for (const [k] of Object.entries(a)) {
-              try {
-                clean[k] = (a as any)[k];
-              } catch {
-                clean[k] = "[Unreadable Property]";
-              }
-            }
-            return clean;
+          if (typeof a !== "object" || a === null) return a;
+          const clean: Record<string, unknown> = {};
+          let keys: string[] = [];
+          try {
+            keys = Object.keys(a);
+          } catch {
+            /* hostile proxy */
           }
-          return a;
+          for (const k of keys) {
+            const v = safeRead(a, k);
+            clean[k] = typeof v === "bigint" ? v.toString() : v;
+          }
+          return clean;
         });
-        const childInstance = origChild.apply(this, safeArgs);
-        return wrapSafeLogger(childInstance);
+        return origChild.apply(this, safeArgs);
       } catch {
-        return instance;
+        return this;
       }
     }
   };
@@ -295,7 +402,7 @@ function wrapSafeLogger(instance: Logger): Logger {
  *
  * @example
  * ```ts
- * import { logger } from 'faultguard';
+ * import { logger } from 'faultkit';
  *
  * logger.info('Server started');
  * logger.error({ err }, 'Unhandled exception');

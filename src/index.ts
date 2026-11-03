@@ -20,7 +20,7 @@ export type {
 export { ErrorCode } from "./types.js";
 
 // ── Abstract Base ─────────────────────────────────────────────────────────────
-export { AppError } from "./AppError.js";
+export { AppError, type AppErrorOptions, type AppErrorJSONOptions } from "./AppError.js";
 
 // ── Concrete Error Classes ────────────────────────────────────────────────────
 export {
@@ -35,7 +35,10 @@ export {
   UnprocessableEntityError,
   RateLimitError,
   InternalServerError,
+  MessageProcessingFailedError,
+  BadGatewayError,
   ServiceUnavailableError,
+  GatewayTimeoutError,
   ContextWindowExceededError,
   ModelRateLimitError,
   LlmProviderDownError,
@@ -45,8 +48,15 @@ export {
 } from "./errors.js";
 
 // ── Normalization & Formatting (WebSockets, RabbitMQ, Lambdas) ────────────────
-export { coerceToAppError } from "./coerce.js";
-export { toErrorResponse, formatError, type FormatErrorOptions } from "./format.js";
+export { coerceToAppError, errorCodeFromStatus, toErrorStatus } from "./coerce.js";
+export {
+  toErrorResponse,
+  formatError,
+  toHttpResponse,
+  type FormatErrorOptions,
+  type HttpErrorResponse,
+} from "./format.js";
+export { sanitizeDetails, normalizeRequestId } from "./sanitize.js";
 
 // ── Observability & Logging ───────────────────────────────────────────────────
 export {

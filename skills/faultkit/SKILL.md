@@ -39,13 +39,13 @@ What is the task?
 │   ├── Input validation failure (Zod, Joi, class-validator, manual)?
 │   │   └── USE: ValidationError(details, message?) [CRITICAL: details is 1st argument!]
 │   ├── Requested record / resource does not exist?
-│   │   └── USE: NotFoundError(message?)
+│   │   └── USE: NotFoundError(message?, details?)
 │   ├── Authentication failure?
-│   │   ├── JWT / session expired? ──> USE: TokenExpiredError(message?)
-│   │   ├── Malformed or invalid signature? ──> USE: TokenInvalidError(message?)
-│   │   └── Missing credentials? ──> USE: UnauthorizedError(message?)
+│   │   ├── JWT / session expired? ──> USE: TokenExpiredError(message?, details?)
+│   │   ├── Malformed or invalid signature? ──> USE: TokenInvalidError(message?, details?)
+│   │   └── Missing credentials? ──> USE: UnauthorizedError(message?, details?)
 │   ├── Authenticated but lacks required role or permission?
-│   │   └── USE: ForbiddenError(message?)
+│   │   └── USE: ForbiddenError(message?, details?)
 │   ├── State conflict, duplicate key, or unique constraint violation?
 │   │   └── USE: ConflictError(message?, details?)
 │   ├── Syntactically malformed request or missing body?
@@ -53,9 +53,13 @@ What is the task?
 │   ├── Syntactically valid but semantic business rule violated?
 │   │   └── USE: UnprocessableEntityError(message?, details?)
 │   ├── Rate limit threshold exceeded?
-│   │   └── USE: RateLimitError(message?)
+│   │   └── USE: RateLimitError(message?, { retryAfterSeconds })
 │   ├── Downstream database or microservice unreachable?
-│   │   └── USE: ServiceUnavailableError(message?)
+│   │   └── USE: ServiceUnavailableError(message?, details?, { cause: err })
+│   ├── Upstream service timed out or returned garbage?
+│   │   └── USE: GatewayTimeoutError(...) (504) or BadGatewayError(...) (502)
+│   ├── Queue / event consumer failed to process a message?
+│   │   └── USE: MessageProcessingFailedError(message?, details?)
 │   ├── Unexpected system fault or programmer bug?
 │   │   └── USE: InternalServerError(message?, details?)
 │   └── Specialized business domain error?
@@ -65,9 +69,13 @@ What is the task?
 │   ├── Express service?
 │   │   └── USE: createExpressErrorHandler(options) from "faultkit/express"
 │   │       ├── MOUNT: as the absolute last middleware (after all routes)
-│   │       ├── SUPPORTS: Mongoose errors (ValidationError, 11000) & custom errorCoercer
+│   │       ├── MOUNT BEFORE IT: createNotFoundHandler() so unmatched routes return JSON 404
+│   │       ├── EXPRESS 4 ASYNC ROUTES: wrap with asyncHandler(fn)
+│   │       ├── AUTO-COERCES: Mongoose, MongoDB 11000, Prisma, Zod, Joi, http-errors
 │   │       └── ENSURE: 4-argument signature (err, req, res, next)
-│   └── WebSockets (Socket.io) / Message Queues (RabbitMQ) / Fastify / Lambda?
+│   ├── Fastify / Hono / Koa / Lambda / Next.js (needs a status code)?
+│   │   └── USE: const { statusCode, body } = toHttpResponse(err, { requestId }) from "faultkit"
+│   └── WebSockets (Socket.io) / Message Queues (RabbitMQ)?
 │       └── USE: toErrorResponse(err, { requestId }) or formatError(err) from "faultkit"
 │
 ├── 3. Logging events or tracing requests?
@@ -93,6 +101,8 @@ What is the task?
 - **NEVER** import `createExpressErrorHandler` from `"faultkit"`. Import from the subpath export `"faultkit/express"`.
 - **NEVER** mount `createExpressErrorHandler()` before routes. Express error handlers only catch errors from routes registered before them.
 - **NEVER** create an Express error middleware with fewer than 4 arguments `(err, req, res, next)`. Express uses `fn.length === 4` to identify error handlers.
+- **NEVER** send `err.toJSON()` straight to clients. It does not mask 5xx messages. Use `toHttpResponse(err)` or `toErrorResponse(err)`.
+- **NEVER** make `errorCoercer` async. Coercers must return synchronously; a returned Promise is ignored.
 - **NEVER** put passwords, tokens, or PII into `details` for 4xx errors. When `isOperational` is `true`, `details` is serialized directly into the client JSON response.
 - **PREFER** `logger.error({ err }, "msg")` over `logger.error(err.message)`. FaultKit's Pino serializer extracts `statusCode`, `errorCode`, `isOperational`, `details`, and `stack` from `{ err }`.
 - **PREFER** specific error subclasses (`TokenExpiredError`, `ForbiddenError`, `ConflictError`) over generic `BadRequestError` or `InternalServerError`.
@@ -103,20 +113,35 @@ What is the task?
 
 All error classes extend `AppError` and are imported from `"faultkit"`.
 
-| Class | HTTP Status | Error Code (`ErrorCode.*`) | Constructor Signature | `isOperational` |
-|---|---|---|---|---|
-| `BadRequestError` | 400 | `BAD_REQUEST` | `(message?: string, details?: unknown)` | `true` |
-| `ValidationError` | 400 | `VALIDATION_ERROR` | `(details: unknown, message?: string)` | `true` |
-| `UnauthorizedError` | 401 | `UNAUTHORIZED` | `(message?: string)` | `true` |
-| `TokenExpiredError` | 401 | `TOKEN_EXPIRED` | `(message?: string)` | `true` |
-| `TokenInvalidError` | 401 | `TOKEN_INVALID` | `(message?: string)` | `true` |
-| `ForbiddenError` | 403 | `FORBIDDEN` | `(message?: string)` | `true` |
-| `NotFoundError` | 404 | `NOT_FOUND` | `(message?: string)` | `true` |
-| `ConflictError` | 409 | `CONFLICT` | `(message?: string, details?: unknown)` | `true` |
-| `UnprocessableEntityError` | 422 | `UNPROCESSABLE_ENTITY` | `(message?: string, details?: unknown)` | `true` |
-| `RateLimitError` | 429 | `RATE_LIMIT_EXCEEDED` | `(message?: string)` | `true` |
-| `InternalServerError` | 500 | `INTERNAL_SERVER_ERROR` | `(message?: string, details?: unknown)` | `false` |
-| `ServiceUnavailableError` | 503 | `SERVICE_UNAVAILABLE` | `(message?: string)` | `false` |
+Every class takes `(message?, details?, options?)` where `options` is `{ cause?: unknown }`.
+The only exception is `ValidationError`, which takes `(details, message?, options?)`.
+
+| Class | HTTP Status | Error Code (`ErrorCode.*`) | `isOperational` |
+|---|---|---|---|
+| `BadRequestError` | 400 | `BAD_REQUEST` | `true` |
+| `ValidationError` | 400 | `VALIDATION_ERROR` | `true` |
+| `UnauthorizedError` | 401 | `UNAUTHORIZED` | `true` |
+| `TokenExpiredError` | 401 | `TOKEN_EXPIRED` | `true` |
+| `TokenInvalidError` | 401 | `TOKEN_INVALID` | `true` |
+| `ForbiddenError` | 403 | `FORBIDDEN` | `true` |
+| `NotFoundError` | 404 | `NOT_FOUND` | `true` |
+| `ConflictError` | 409 | `CONFLICT` | `true` |
+| `UnprocessableEntityError` | 422 | `UNPROCESSABLE_ENTITY` | `true` |
+| `RateLimitError` | 429 | `RATE_LIMIT_EXCEEDED` | `true` |
+| `InternalServerError` | 500 | `INTERNAL_SERVER_ERROR` | `false` |
+| `MessageProcessingFailedError` | 500 | `MESSAGE_PROCESSING_FAILED` | `false` |
+| `BadGatewayError` | 502 | `BAD_GATEWAY` | `false` |
+| `ServiceUnavailableError` | 503 | `SERVICE_UNAVAILABLE` | `false` |
+| `GatewayTimeoutError` | 504 | `GATEWAY_TIMEOUT` | `false` |
+| `ContextWindowExceededError` | 400 | `CONTEXT_WINDOW_EXCEEDED` | `true` |
+| `ContentFilteredError` | 400 | `CONTENT_FILTERED` | `true` |
+| `InsufficientCreditsError` | 402 | `INSUFFICIENT_CREDITS` | `true` |
+| `ModelNotFoundError` | 404 | `MODEL_NOT_FOUND` | `true` |
+| `ModelRateLimitError` | 429 | `MODEL_RATE_LIMIT` | `true` |
+| `LlmProviderDownError` | 503 | `LLM_PROVIDER_DOWN` | `false` |
+
+Helpers from `"faultkit"`: `toHttpResponse`, `toErrorResponse`, `formatError`, `coerceToAppError`, `errorCodeFromStatus`, `sanitizeDetails`, `normalizeRequestId`.
+Helpers from `"faultkit/express"`: `createExpressErrorHandler`, `createNotFoundHandler`, `asyncHandler`.
 
 > ⚠️ **CRITICAL SIGNATURE TRAP:**
 > `ValidationError` takes `(details, message)` — details is FIRST:
@@ -147,7 +172,7 @@ interface FaultKitLoggerOptions {
   service?: string;            // Service name for Loki filtering (default: process.env.SERVICE_NAME || 'api')
   level?: LogLevel;            // 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent' (default: 'info')
   redact?: string[];           // Property paths to sanitize (default: DEFAULT_REDACT_KEYS)
-  base?: Record<string, any>;  // Base fields merged into every log entry
+  base?: Record<string, any> | null; // Merged into every entry (default has pid, hostname, service; null keeps only service)
   includeStackInLog?: boolean; // Whether to serialize stack traces (default: true)
   destination?: DestinationStream; // Custom writable output stream
 }
@@ -165,8 +190,10 @@ Every error response strictly matches this schema:
   "error": {
     "code": "STRING_ENUM",
     "message": "Safe human-readable message",
-    "details": null
-  }
+    "details": null,
+    "requestId": "optional-correlation-id"
+  },
+  "requestId": "optional-correlation-id"
 }
 ```
 
@@ -201,26 +228,20 @@ export async function registerUser(input: { email: string; name: string }) {
 ```typescript
 import express from "express";
 import { NotFoundError } from "faultkit";
-import { createExpressErrorHandler } from "faultkit/express";
+import { createExpressErrorHandler, createNotFoundHandler, asyncHandler } from "faultkit/express";
 
 const app = express();
 app.use(express.json());
 
-// Routes...
-app.get("/api/users/:id", async (req, res, next) => {
-  try {
-    const user = await getUser(req.params.id);
-    if (!user) throw new NotFoundError(`User ${req.params.id} not found`);
-    res.json({ success: true, data: user });
-  } catch (err) {
-    next(err); // In Express 4, pass async errors to next()
-  }
-});
+// Routes... asyncHandler forwards rejected promises to next(err) (needed in Express 4)
+app.get("/api/users/:id", asyncHandler(async (req, res) => {
+  const user = await getUser(req.params.id);
+  if (!user) throw new NotFoundError(`User ${req.params.id} not found`);
+  res.json({ success: true, data: user });
+}));
 
-// 404 Catch-All Route (Optional, before error handler)
-app.use((req, res, next) => {
-  next(new NotFoundError(`Route ${req.method} ${req.path} not found`));
-});
+// 404 Catch-All: unmatched routes return the JSON contract instead of an HTML page
+app.use(createNotFoundHandler());
 
 // Mount Centralized Error Handler (MUST BE LAST)
 app.use(createExpressErrorHandler({
@@ -273,11 +294,12 @@ import { createExpressErrorHandler } from "faultkit/express";
 import { ConflictError } from "faultkit";
 
 app.use(createExpressErrorHandler({
-  // Built-in: Mongoose ValidationError maps to 400, code 11000 maps to 409 Conflict.
-  // Optional custom coercion for Prisma or Stripe:
+  // Built-in: Mongoose ValidationError / CastError, MongoDB 11000, Prisma P2002 / P2025 / P2003 / P2000,
+  // ZodError, Joi ValidationError and http-errors (err.status) are mapped automatically.
+  // Optional custom coercion (must be synchronous) for anything else, e.g. Stripe:
   errorCoercer: (err: any) => {
-    if (err?.code === "P2002") {
-      return new ConflictError("Database record with unique constraint already exists.");
+    if (err?.type === "StripeCardError") {
+      return new ConflictError("The card was declined.");
     }
   },
   includeRequestId: true, // extracts x-request-id into logs and error responses
@@ -367,4 +389,4 @@ api.interceptors.response.use(
 FaultKit includes a safe, zero-dependency CLI. Run with `--help` first:
 - `npx faultkit init --help` — Configure AI agent skills (.agents, Cursor, Copilot, Claude).
 - `npx faultkit info` — Inspect OpenAPI contract and exported subpaths.
-- `npx faultkit --version` — Print installed version (v1.1.0).
+- `npx faultkit --version` — Print installed version (v1.2.0).

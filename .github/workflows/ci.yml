@@ -35,6 +35,9 @@ jobs:
       - name: Build CJS, ESM & Types
         run: npm run build
 
+      - name: Typecheck Tests & Examples
+        run: npm run test:types
+
       - name: Run Test Suites
         run: npm test
 

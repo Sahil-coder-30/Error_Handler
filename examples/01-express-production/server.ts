@@ -18,8 +18,9 @@ import {
   UnauthorizedError,
   ForbiddenError,
   logger,
+  normalizeRequestId,
 } from "faultkit";
-import { createExpressErrorHandler } from "faultkit/express";
+import { createExpressErrorHandler, createNotFoundHandler } from "faultkit/express";
 
 // Extend Express Request type to include our correlated child logger
 declare global {
@@ -39,12 +40,13 @@ app.use(express.json());
 // 2. Request Tracing Middleware
 // Generates or forwards a correlation ID and binds a child logger to req.log
 app.use((req: Request, _res: Response, next: NextFunction) => {
-  const reqId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+  // normalizeRequestId drops unsafe or oversized client-supplied IDs
+  const reqId = normalizeRequestId(req.headers["x-request-id"]) ?? crypto.randomUUID();
   req.id = reqId;
   req.log = logger.child({
     requestId: reqId,
     method: req.method,
-    path: req.originalUrl,
+    path: req.path,
   });
 
   req.log.info("Incoming HTTP request");
@@ -67,10 +69,11 @@ const usersDb = new Map<string, User>([
 // GET /api/users/:id — Demonstrates NotFoundError
 app.get("/api/users/:id", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const user = usersDb.get(req.params.id);
+    const id = String(req.params.id);
+    const user = usersDb.get(id);
     if (!user) {
       // 404 Not Found
-      throw new NotFoundError(`User with ID '${req.params.id}' was not found.`);
+      throw new NotFoundError(`User with ID '${id}' was not found.`);
     }
 
     req.log.info({ userId: user.id }, "User retrieved successfully");
@@ -148,10 +151,8 @@ app.get("/api/crash", () => {
   throw new Error("Unhandled database connection timeout on pool socket #4");
 });
 
-// 404 Catch-All Route Handler
-app.use((req: Request, _res: Response, next: NextFunction) => {
-  next(new NotFoundError(`Endpoint '${req.method} ${req.originalUrl}' does not exist.`));
-});
+// 404 Catch-All Route Handler: unmatched routes return the JSON contract, not HTML
+app.use(createNotFoundHandler());
 
 // ── Global Error Handler (MUST BE LAST) ───────────────────────────────────────
 // In production (NODE_ENV=production):

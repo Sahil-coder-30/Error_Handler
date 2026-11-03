@@ -1,27 +1,32 @@
 /**
  * @file src/express.ts
- * @description Express-specific error handling middleware factory.
+ * @description Express-specific error handling middleware and helpers.
  *
  * This file is the ONLY place in the package that depends on Express types.
  * It is exported via its own entry point (`faultkit/express`)
  * so that non-Express consumers never pay the cost of this import.
  *
  * Key features:
- *  1. Coerces unknown thrown values, native Errors, Mongoose ValidationErrors,
- *     MongoDB duplicate key errors (11000), and custom ORM exceptions safely.
+ *  1. Coerces unknown thrown values, native Errors, Mongoose, MongoDB, Prisma,
+ *     Zod, Joi and http-errors style exceptions safely.
  *  2. Supports custom `errorCoercer` hook for domain/library error mapping.
  *  3. Distinguishes operational errors (4xx logged at warn) from programmer crashes (5xx logged at error).
- *  4. Distributed tracing: extracts and propagates `requestId` in logs, headers, and response body.
+ *  4. Distributed tracing: extracts (or generates) a validated `requestId` and
+ *     propagates it in logs, headers, and the response body.
  *  5. Never leaks stack traces or sensitive internal details to the client in production.
- *  6. Logger injection with crash-resilient fallback boundary.
+ *  6. Logger injection (Pino, Bunyan, Winston, console) with a crash-resilient fallback boundary.
+ *  7. `createNotFoundHandler()` so unmatched routes return the same JSON contract.
+ *  8. `asyncHandler()` so Express 4 async routes forward rejections to the error handler.
  */
 
-import type { Request, Response, NextFunction, ErrorRequestHandler } from "express";
-import { AppError } from "./AppError.js";
-import { ErrorCode, type ErrorResponse, type ErrorCoercer } from "./types.js";
+import { randomUUID } from "node:crypto";
+import type { Request, Response, NextFunction, ErrorRequestHandler, RequestHandler } from "express";
+import type { AppError } from "./AppError.js";
+import type { ErrorCoercer } from "./types.js";
+import { NotFoundError } from "./errors.js";
 import { logger as defaultLogger } from "./logger.js";
-import { coerceToAppError } from "./coerce.js";
-import { sanitizeDetails } from "./format.js";
+import { toHttpResponse } from "./format.js";
+import { normalizeRequestId } from "./sanitize.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Options
@@ -29,36 +34,56 @@ import { sanitizeDetails } from "./format.js";
 
 /**
  * A logger interface compatible with FaultKit's built-in Pino logger,
- * standard `console`, `winston`, or custom loggers.
+ * standard `console`, `winston`, `bunyan`, or custom loggers.
  */
 export interface ErrorHandlerLogger {
   warn: (arg1: any, ...args: any[]) => void;
   error: (arg1: any, ...args: any[]) => void;
 }
 
+/**
+ * How log arguments are ordered:
+ *  - `"object-first"`: `logger.error({ err, ...meta }, message)` (Pino, Bunyan)
+ *  - `"message-first"`: `logger.error(message, { err, ...meta })` (console, Winston)
+ *  - `"auto"`: detect from the logger (default)
+ */
+export type LoggerStyle = "auto" | "object-first" | "message-first";
+
 export interface ErrorHandlerOptions {
   /**
    * Injected logger. Defaults to FaultKit's built-in Grafana/Loki-optimized Pino logger.
-   * You can also supply custom Pino, Winston, or console instances.
+   * You can also supply custom Pino, Winston, Bunyan, or console instances.
+   * Pass `false` to disable logging.
    */
-  logger?: ErrorHandlerLogger;
+  logger?: ErrorHandlerLogger | false | null;
 
   /**
-   * Set to `true` in development to include the stack trace in the
-   * server-side log output. Never included in the HTTP response body.
+   * Argument order used when calling the logger. Defaults to `"auto"`.
+   */
+  loggerStyle?: LoggerStyle;
+
+  /**
+   * Whether to include the stack trace in the server-side log output.
+   * Never included in the HTTP response body.
    * Defaults to `process.env.NODE_ENV !== 'production'`.
    */
   includeStackInLog?: boolean;
 
   /**
-   * The generic message returned for non-operational (5xx programmer) errors.
+   * Whether to mask non-operational error messages and details in responses.
+   * Defaults to `process.env.NODE_ENV === 'production'` (checked per request).
+   */
+  isProduction?: boolean;
+
+  /**
+   * The generic message returned for non-operational (5xx programmer) errors in production.
    * Prevents leaking internal implementation details to API consumers.
    */
   genericServerErrorMessage?: string;
 
   /**
    * Custom error coercion hook to map Mongoose, Prisma, or proprietary library errors.
-   * Runs before default error normalization.
+   * Runs before default error normalization. Must be synchronous.
    */
   errorCoercer?: ErrorCoercer;
 
@@ -69,16 +94,119 @@ export interface ErrorHandlerOptions {
   includeRequestId?: boolean;
 
   /**
-   * Request header name to extract correlation ID from.
-   * Defaults to `'x-request-id'`.
+   * Request header name to extract the correlation ID from, and the response
+   * header it is echoed in. Defaults to `'x-request-id'`.
    */
   requestIdHeader?: string;
 
   /**
-   * Custom function to extract or generate the request ID from the Express request.
-   * Defaults to `req.id || req.headers[requestIdHeader] || req.headers['x-correlation-id']`.
+   * Custom function to extract the request ID from the Express request.
+   * Defaults to `req.id || req.requestId || req.correlationId || req.headers[requestIdHeader] || req.headers['x-correlation-id']`.
    */
-  getRequestId?: (req: Request) => string | undefined;
+  getRequestId?: (req: Request) => string | number | undefined;
+
+  /**
+   * Generate a request ID when the request has none.
+   * `true` uses `crypto.randomUUID()`; a function lets you build your own.
+   * Defaults to `false`.
+   */
+  generateRequestId?: boolean | ((req: Request) => string);
+
+  /**
+   * Called once per handled error, after logging (e.g. to report to Sentry).
+   * Errors thrown by this hook are caught and ignored.
+   */
+  onError?: (error: AppError, req: Request, originalError: unknown) => void;
+}
+
+const DEFAULT_GENERIC_MESSAGE = "An unexpected error occurred. Our team has been notified.";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function read(obj: unknown, key: string): unknown {
+  try {
+    return obj !== null && obj !== undefined ? (obj as Record<string, unknown>)[key] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function detectStyle(logger: unknown, style: LoggerStyle | undefined): "object-first" | "message-first" {
+  if (style === "object-first" || style === "message-first") return style;
+  // Winston exposes `transports` and `format`; it expects the message first.
+  if (read(logger, "transports") !== undefined && read(logger, "format") !== undefined) {
+    return "message-first";
+  }
+  // Pino and Bunyan expose `child()` and take a merge object first.
+  return typeof read(logger, "child") === "function" ? "object-first" : "message-first";
+}
+
+/** Request path without the query string (query strings often carry tokens). */
+function requestPath(req: Request | undefined): string | undefined {
+  const raw = read(req, "originalUrl") ?? read(req, "url");
+  if (typeof raw !== "string") return undefined;
+  const q = raw.indexOf("?");
+  return q === -1 ? raw : raw.slice(0, q);
+}
+
+function extractRequestId(
+  req: Request | undefined,
+  header: string,
+  getRequestId: ErrorHandlerOptions["getRequestId"],
+  generateRequestId: ErrorHandlerOptions["generateRequestId"]
+): string | undefined {
+  if (typeof getRequestId === "function") {
+    try {
+      const custom = normalizeRequestId(getRequestId(req as Request));
+      if (custom) return custom;
+    } catch {
+      /* ignore extractor errors */
+    }
+  }
+
+  if (req) {
+    for (const key of ["id", "requestId", "correlationId"]) {
+      const id = normalizeRequestId(read(req, key));
+      if (id) return id;
+    }
+
+    const headers = read(req, "headers") as Record<string, unknown> | undefined;
+    if (headers && typeof headers === "object") {
+      for (const name of [header.toLowerCase(), "x-correlation-id"]) {
+        const value = read(headers, name);
+        const id = normalizeRequestId(Array.isArray(value) ? value[0] : value);
+        if (id) return id;
+      }
+    }
+  }
+
+  if (generateRequestId) {
+    try {
+      const generated =
+        typeof generateRequestId === "function" ? generateRequestId(req as Request) : randomUUID();
+      return normalizeRequestId(generated);
+    } catch {
+      /* ignore generator errors */
+    }
+  }
+
+  return undefined;
+}
+
+/** Builds the error object passed to the logger, honoring `includeStackInLog`. */
+function errorForLog(appError: AppError, includeStack: boolean): unknown {
+  if (includeStack) return appError;
+  return {
+    type: appError.name,
+    name: appError.name,
+    message: appError.message,
+    statusCode: appError.statusCode,
+    errorCode: appError.errorCode,
+    isOperational: appError.isOperational,
+    ...(appError.details !== null && appError.details !== undefined ? { details: appError.details } : {}),
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -94,178 +222,189 @@ export interface ErrorHandlerOptions {
  * @example
  * ```ts
  * import express from 'express';
- * import { createExpressErrorHandler } from 'faultkit/express';
+ * import { createExpressErrorHandler, createNotFoundHandler } from 'faultkit/express';
  *
  * const app = express();
+ * // ...routes
+ * app.use(createNotFoundHandler());
  * app.use(createExpressErrorHandler({
  *   errorCoercer: (err) => {
- *     if (isPrismaError(err)) return new ConflictError("Database constraint violated");
+ *     if (isStripeError(err)) return new BadRequestError(err.message);
  *   }
  * }));
  * ```
  */
-export function createExpressErrorHandler(
-  options: ErrorHandlerOptions = {}
-): ErrorRequestHandler {
+export function createExpressErrorHandler(options?: ErrorHandlerOptions | null): ErrorRequestHandler {
+  const opts: ErrorHandlerOptions = options && typeof options === "object" ? options : {};
   const {
-    logger = defaultLogger,
     includeStackInLog = process.env.NODE_ENV !== "production",
-    genericServerErrorMessage = "An unexpected error occurred. Our team has been notified.",
+    genericServerErrorMessage = DEFAULT_GENERIC_MESSAGE,
     errorCoercer,
     includeRequestId = true,
-    requestIdHeader = "x-request-id",
     getRequestId,
-  } = options;
+    generateRequestId = false,
+    onError,
+  } = opts;
+
+  const logger: ErrorHandlerLogger | false =
+    opts.logger === false ? false : opts.logger ? opts.logger : defaultLogger;
+  const style = logger ? detectStyle(logger, opts.loggerStyle) : "message-first";
+  const requestIdHeader =
+    typeof opts.requestIdHeader === "string" && opts.requestIdHeader.trim().length > 0
+      ? opts.requestIdHeader.trim()
+      : "x-request-id";
+
+  function log(level: "warn" | "error", message: string, payload: Record<string, unknown>): void {
+    if (!logger) return;
+    try {
+      const fn = logger[level];
+      if (typeof fn !== "function") return;
+      if (style === "object-first") fn.call(logger, payload, message);
+      else fn.call(logger, message, payload);
+    } catch (loggingErr) {
+      try {
+        console.error("[FaultKit] Logger invocation failed:", loggingErr);
+      } catch {
+        /* nothing left to do */
+      }
+    }
+  }
 
   // Express identifies a global error handler by its 4-argument signature: (err, req, res, next).
-  return function globalErrorHandler(
-    err: unknown,
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ): void {
-    // ── Express Safeguard: If headers were already sent, delegate to default handler
-    if (res.headersSent || res.writableEnded) {
-      return next(err);
-    }
+  return function globalErrorHandler(err: unknown, req: Request, res: Response, next: NextFunction): void {
+    const forward = (value: unknown): void => {
+      if (typeof next === "function") next(value);
+    };
 
-    // ── Step 1: Normalize the thrown value into an AppError ──────────────────
-    const appError: AppError = coerceToAppError(err, errorCoercer);
+    // ── Step 1: Normalize into status + body (never throws) ──────────────────
+    const requestId = includeRequestId
+      ? extractRequestId(req, requestIdHeader, getRequestId, generateRequestId)
+      : undefined;
 
-    // ── Step 2: Distributed Request / Correlation ID ─────────────────────────
-    let requestId: string | undefined;
-    if (includeRequestId) {
-      if (typeof getRequestId === "function") {
-        try {
-          const customId = getRequestId(req);
-          if (typeof customId === "string" && customId.trim().length > 0) {
-            requestId = customId.trim();
-          }
-        } catch {
-          // ignore extractor errors
-        }
-      }
-      if (!requestId && req) {
-        const anyReq = req as unknown as Record<string, unknown>;
-        const rawId = anyReq.id || anyReq.requestId || anyReq.correlationId;
-        if (typeof rawId === "string" && rawId.trim().length > 0) {
-          requestId = rawId.trim();
-        }
+    const { statusCode, body, error: appError } = toHttpResponse(err, {
+      errorCoercer,
+      genericServerErrorMessage,
+      isProduction: typeof opts.isProduction === "boolean" ? opts.isProduction : undefined,
+      requestId,
+    });
 
-        if (!requestId && req.headers) {
-          const headerVal =
-            req.headers[requestIdHeader.toLowerCase()] ||
-            req.headers["x-correlation-id"];
-          if (typeof headerVal === "string" && headerVal.trim().length > 0) {
-            requestId = headerVal.trim();
-          } else if (Array.isArray(headerVal) && typeof headerVal[0] === "string" && headerVal[0].trim().length > 0) {
-            requestId = headerVal[0].trim();
-          }
-        }
-      }
-
-      // Propagate correlation ID in outgoing response headers if not already set
-      if (requestId && !res.headersSent && typeof res.setHeader === "function") {
-        try {
-          res.setHeader(requestIdHeader, requestId);
-        } catch {
-          // safe boundary
-        }
-      }
-    }
-
-    // ── Step 3: Log with appropriate severity & correlation context ──────────
-    const logMeta = {
+    // ── Step 2: Log with appropriate severity & correlation context ──────────
+    const headersAlreadySent = Boolean(read(res, "headersSent")) || Boolean(read(res, "writableEnded"));
+    const logPayload: Record<string, unknown> = {
+      err: errorForLog(appError, includeStackInLog),
       statusCode: appError.statusCode,
       errorCode: appError.errorCode,
       isOperational: appError.isOperational,
       details: appError.details,
-      path: req ? req.originalUrl || req.url : undefined,
-      method: req ? req.method : undefined,
+      path: requestPath(req),
+      method: read(req, "method"),
       ...(requestId ? { requestId } : {}),
-      ...(includeStackInLog && { stack: appError.stack }),
+      ...(includeStackInLog && appError.stack ? { stack: appError.stack } : {}),
+      ...(headersAlreadySent ? { headersSent: true } : {}),
     };
-
     const logMessage = `[AppError] ${appError.name}: ${appError.message}`;
-    const logPayload = { err: appError, ...logMeta };
-    const isPino = typeof (logger as { child?: unknown }).child === "function";
+    const critical = !appError.isOperational || statusCode >= 500 || headersAlreadySent;
+    log(critical ? "error" : "warn", logMessage, logPayload);
 
-    try {
-      if (!appError.isOperational || appError.statusCode >= 500) {
-        // 500s and programmer errors are CRITICAL — always log at error level.
-        if (isPino) {
-          logger.error(logPayload, logMessage);
-        } else {
-          logger.error(logMessage, logPayload);
-        }
-      } else {
-        // Operational 4xx errors are expected — log at warn level to reduce noise.
-        if (isPino) {
-          logger.warn(logPayload, logMessage);
-        } else {
-          logger.warn(logMessage, logPayload);
-        }
-      }
-    } catch (loggingErr) {
-      console.error("[FaultKit] Logger invocation failed:", loggingErr);
-    }
-
-    // ── Step 4: Build the strict OpenAPI-compliant response ──────────────────
-    const isProduction = process.env.NODE_ENV === "production";
-
-    /**
-     * Clamp status codes to valid HTTP error range (400-599).
-     * Any status code outside this range (e.g. 200 OK or > 599) is coerced to 500.
-     */
-    let safeStatusCode = 500;
-    if (typeof appError.statusCode === "number" && !isNaN(appError.statusCode)) {
-      const rounded = Math.floor(appError.statusCode);
-      if (rounded >= 400 && rounded <= 599) {
-        safeStatusCode = rounded;
+    if (typeof onError === "function") {
+      try {
+        onError(appError, req, err);
+      } catch {
+        /* reporting hooks must never break the response */
       }
     }
 
-    /**
-     * For non-operational errors in production, hide the real message to
-     * prevent leaking implementation details. In development, show it.
-     */
-    const clientMessage =
-      appError.isOperational || !isProduction
-        ? appError.message
-        : genericServerErrorMessage;
+    // ── Step 3: If a response is already streaming, let Express close it ─────
+    if (headersAlreadySent || !res) {
+      forward(err);
+      return;
+    }
 
-    const rawDetails = appError.isOperational ? appError.details : null;
-    const clientDetails = rawDetails !== null && rawDetails !== undefined ? sanitizeDetails(rawDetails) : null;
+    // ── Step 4: Send the response ────────────────────────────────────────────
+    if (requestId) {
+      try {
+        res.setHeader(requestIdHeader, requestId);
+      } catch {
+        /* invalid header name or already sent */
+      }
+    }
 
-    const responseBody: ErrorResponse = {
-      success: false,
-      error: {
-        code: appError.errorCode,
-        message: clientMessage,
-        details: clientDetails,
-        ...(requestId ? { requestId } : {}),
-      },
-      ...(requestId ? { requestId } : {}),
-    };
-
-    // ── Step 5: Send the response ────────────────────────────────────────────
     try {
-      res.status(safeStatusCode).json(responseBody);
+      res.status(statusCode).json(body);
     } catch {
       try {
-        res.status(safeStatusCode).json({
+        res.status(statusCode).json({
           success: false,
-          error: {
-            code: appError.errorCode,
-            message: clientMessage,
-            details: null,
-            ...(requestId ? { requestId } : {}),
-          },
-          ...(requestId ? { requestId } : {}),
+          error: { code: body.error.code, message: body.error.message, details: null },
         });
       } catch {
-        next(appError);
+        forward(appError);
       }
+    }
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers for routes
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface NotFoundHandlerOptions {
+  /** Custom message, or a function that builds one from the request. */
+  message?: string | ((req: Request) => string);
+}
+
+/**
+ * Catch-all middleware for unmatched routes. Mount it after all routes and
+ * before `createExpressErrorHandler()`, so a missing route returns the JSON
+ * contract instead of Express's default HTML page.
+ *
+ * @example
+ * ```ts
+ * app.use(createNotFoundHandler());
+ * app.use(createExpressErrorHandler());
+ * ```
+ */
+export function createNotFoundHandler(options?: NotFoundHandlerOptions | null): RequestHandler {
+  const opts = options && typeof options === "object" ? options : {};
+  return function notFoundHandler(req: Request, _res: Response, next: NextFunction): void {
+    let message: string | undefined;
+    try {
+      message = typeof opts.message === "function" ? opts.message(req) : opts.message;
+    } catch {
+      message = undefined;
+    }
+    if (typeof message !== "string" || message.length === 0) {
+      const method = read(req, "method");
+      message = `Route ${typeof method === "string" ? method : "GET"} ${requestPath(req) ?? "/"} not found.`;
+    }
+    next(new NotFoundError(message));
+  };
+}
+
+/**
+ * Wraps an async route handler so a rejected promise (or a sync throw) is
+ * forwarded to `next(err)`. Needed in Express 4; harmless in Express 5.
+ *
+ * @example
+ * ```ts
+ * app.get("/users/:id", asyncHandler(async (req, res) => {
+ *   res.json(await getUser(req.params.id));
+ * }));
+ * ```
+ */
+export function asyncHandler<Req extends Request = Request, Res extends Response = Response>(
+  fn: (req: Req, res: Res, next: NextFunction) => unknown
+): (req: Req, res: Res, next: NextFunction) => void {
+  return function asyncRoute(req: Req, res: Res, next: NextFunction): void {
+    try {
+      const result = fn(req, res, next);
+      if (result && typeof (result as PromiseLike<unknown>).then === "function") {
+        (result as PromiseLike<unknown>).then(undefined, (err: unknown) =>
+          next(err === undefined || err === null ? new Error("Async route rejected without a reason") : err)
+        );
+      }
+    } catch (err) {
+      next(err);
     }
   };
 }

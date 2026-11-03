@@ -78,8 +78,10 @@ Guaranteed OpenAPI Error Shape:
     "error": {
       "code": "STRING_ENUM",
       "message": "Human-readable message",
-      "details": null | Record<string, unknown>
-    }
+      "details": null | Record<string, unknown>,
+      "requestId"?: "string"
+    },
+    "requestId"?: "string"
   }
 
 Agent Skills:
@@ -115,13 +117,13 @@ ${body}`;
 }
 
 function generateCopilotSnippet(skillContent) {
-  const body = skillContent.replace(/^---[\s\S]*?---\s*/, "");
-  return `\n\n<!-- BEGIN FAULTKIT INSTRUCTIONS -->\n# FaultKit Error Handling Guidelines\n\n${body}\n<!-- END FAULTKIT INSTRUCTIONS -->\n`;
+  const body = skillContent.replace(/^---[\s\S]*?---\s*/, "").trim();
+  return `<!-- BEGIN FAULTKIT INSTRUCTIONS -->\n# FaultKit Error Handling Guidelines\n\n${body}\n<!-- END FAULTKIT INSTRUCTIONS -->`;
 }
 
 function generateClaudeSnippet(skillContent) {
-  const body = skillContent.replace(/^---[\s\S]*?---\s*/, "");
-  return `\n\n<!-- BEGIN FAULTKIT INSTRUCTIONS -->\n# FaultKit Guidelines\n\n${body}\n<!-- END FAULTKIT INSTRUCTIONS -->\n`;
+  const body = skillContent.replace(/^---[\s\S]*?---\s*/, "").trim();
+  return `<!-- BEGIN FAULTKIT INSTRUCTIONS -->\n# FaultKit Guidelines\n\n${body}\n<!-- END FAULTKIT INSTRUCTIONS -->`;
 }
 
 function writeFileSafely(targetPath, content, options) {
@@ -129,6 +131,10 @@ function writeFileSafely(targetPath, content, options) {
   const relPath = path.relative(process.cwd(), targetPath);
 
   if (fs.existsSync(targetPath)) {
+    if (!fs.statSync(targetPath).isFile()) {
+      console.error(`  ❌ [Error]     ${relPath} exists but is not a file; remove it and retry`);
+      return { status: "error", path: relPath };
+    }
     const existing = fs.readFileSync(targetPath, "utf8");
     if (existing === content) {
       console.log(`  🔹 [Identical] ${relPath} (already up to date)`);
@@ -155,15 +161,50 @@ function writeFileSafely(targetPath, content, options) {
   return { status: "created", path: relPath };
 }
 
-function appendFileSafely(targetPath, snippet, marker, options) {
+const BEGIN_MARKER = "<!-- BEGIN FAULTKIT INSTRUCTIONS -->";
+const END_MARKER = "<!-- END FAULTKIT INSTRUCTIONS -->";
+
+/**
+ * Adds the FaultKit block to a shared instructions file (CLAUDE.md, copilot-instructions.md)
+ * without touching the user's own content. An existing block is replaced only with --force.
+ */
+function appendFileSafely(targetPath, snippet, options) {
   const { force, dryRun } = options;
   const relPath = path.relative(process.cwd(), targetPath);
+  const block = snippet.trim();
 
   if (fs.existsSync(targetPath)) {
+    if (!fs.statSync(targetPath).isFile()) {
+      console.error(`  ❌ [Error]     ${relPath} exists but is not a file; remove it and retry`);
+      return { status: "error", path: relPath };
+    }
     const existing = fs.readFileSync(targetPath, "utf8");
-    if (existing.includes(marker)) {
-      console.log(`  🔹 [Identical] ${relPath} (instructions already present)`);
-      return { status: "identical", path: relPath };
+    const start = existing.indexOf(BEGIN_MARKER);
+    const end = start === -1 ? -1 : existing.indexOf(END_MARKER, start);
+
+    if (start !== -1 && end !== -1) {
+      const current = existing.slice(start, end + END_MARKER.length);
+      if (current.replace(/\r\n/g, "\n") === block) {
+        console.log(`  🔹 [Identical] ${relPath} (instructions already present)`);
+        return { status: "identical", path: relPath };
+      }
+      if (!force) {
+        console.log(`  ⚠️  [Outdated]  ${relPath} (FaultKit block is older; use --force to update it)`);
+        return { status: "skipped", path: relPath };
+      }
+      if (dryRun) {
+        console.log(`  🔍 [Dry-Run]   Would update the FaultKit block in ${relPath}`);
+        return { status: "dry-run", path: relPath };
+      }
+      const updated = existing.slice(0, start) + block + existing.slice(end + END_MARKER.length);
+      fs.writeFileSync(targetPath, updated, "utf8");
+      console.log(`  ✅ [Updated]   ${relPath}`);
+      return { status: "updated", path: relPath };
+    }
+
+    if (start !== -1) {
+      console.log(`  ⚠️  [Skipped]   ${relPath} (found a FaultKit start marker without an end marker; fix it manually)`);
+      return { status: "skipped", path: relPath };
     }
     if (!force) {
       console.log(`  ⚠️  [Skipped]   ${relPath} (already exists without marker; use --force to append)`);
@@ -173,7 +214,8 @@ function appendFileSafely(targetPath, snippet, marker, options) {
       console.log(`  🔍 [Dry-Run]   Would append to ${relPath}`);
       return { status: "dry-run", path: relPath };
     }
-    fs.appendFileSync(targetPath, snippet, "utf8");
+    const separator = existing.length === 0 || existing.endsWith("\n") ? "\n" : "\n\n";
+    fs.appendFileSync(targetPath, separator + block + "\n", "utf8");
     console.log(`  ✅ [Appended]  ${relPath}`);
     return { status: "appended", path: relPath };
   }
@@ -183,12 +225,8 @@ function appendFileSafely(targetPath, snippet, marker, options) {
     return { status: "dry-run", path: relPath };
   }
 
-  const dir = path.dirname(targetPath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-
-  fs.writeFileSync(targetPath, snippet.trimStart(), "utf8");
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.writeFileSync(targetPath, block + "\n", "utf8");
   console.log(`  ✅ [Created]   ${relPath}`);
   return { status: "created", path: relPath };
 }
@@ -215,6 +253,9 @@ function runInit(args) {
     } else if (arg === "-h" || arg === "--help") {
       printHelp();
       return 0;
+    } else {
+      console.error(`Error: Unknown option '${arg}' for 'init'. Run 'npx faultkit init --help' for usage.`);
+      return 1;
     }
   }
 
@@ -271,7 +312,6 @@ function runInit(args) {
       appendFileSafely(
         dest,
         generateCopilotSnippet(skillContent),
-        "BEGIN FAULTKIT INSTRUCTIONS",
         options
       )
     );
@@ -283,13 +323,22 @@ function runInit(args) {
       appendFileSafely(
         dest,
         generateClaudeSnippet(skillContent),
-        "BEGIN FAULTKIT INSTRUCTIONS",
         options
       )
     );
   }
 
+  const failed = results.filter((r) => r.status === "error").length;
+  const skipped = results.filter((r) => r.status === "skipped").length;
+
+  if (failed > 0) {
+    console.error(`\n❌ FaultKit setup finished with ${failed} error(s).\n`);
+    return 1;
+  }
   console.log("\n✨ FaultKit agent integration setup complete!");
+  if (skipped > 0) {
+    console.log(`   ${skipped} file(s) were skipped. Re-run with --force to overwrite or update them.`);
+  }
   console.log("   AI coding agents can now discover, inspect, and use FaultKit rules.\n");
   return 0;
 }
@@ -314,7 +363,13 @@ function main() {
   }
 
   if (command === "init") {
-    const exitCode = runInit(args.slice(1));
+    let exitCode = 1;
+    try {
+      exitCode = runInit(args.slice(1));
+    } catch (err) {
+      const reason = err && err.message ? err.message : String(err);
+      console.error(`Error: FaultKit init failed: ${reason}`);
+    }
     process.exit(exitCode);
   }
 

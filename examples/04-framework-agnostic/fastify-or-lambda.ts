@@ -1,34 +1,22 @@
 /**
  * @file examples/04-framework-agnostic/fastify-or-lambda.ts
  * @description Using FaultKit with non-Express frameworks (Fastify, Hono, AWS Lambda).
- * Shows how core error classes and toJSON() work anywhere without Express dependencies.
+ * Shows how toHttpResponse() gives the same status + OpenAPI body anywhere,
+ * with production masking, without Express dependencies.
  */
 
-import {
-  AppError,
-  NotFoundError,
-  ValidationError,
-  type ErrorResponse,
-} from "faultkit";
+import { NotFoundError, ValidationError, toHttpResponse, logger } from "faultkit";
 
 // ── Pattern 1: Fastify Error Handler ──────────────────────────────────────────
-export function fastifyErrorHandler(error: unknown, _request: any, reply: any) {
-  if (error instanceof AppError) {
-    // AppError has built-in toJSON() producing OpenAPI { success: false, error: { ... } }
-    reply.status(error.statusCode).send(error.toJSON());
-    return;
-  }
+export function fastifyErrorHandler(error: unknown, request: any, reply: any) {
+  // Handles AppError, native errors, Mongoose, Prisma, Zod and unknown throws.
+  // Non-operational messages are masked when NODE_ENV=production.
+  const { statusCode, body, error: appError } = toHttpResponse(error, { requestId: request.id });
 
-  // Fallback for native errors
-  const fallback: ErrorResponse = {
-    success: false,
-    error: {
-      code: "INTERNAL_SERVER_ERROR",
-      message: "An unexpected error occurred.",
-      details: null,
-    },
-  };
-  reply.status(500).send(fallback);
+  if (statusCode >= 500) logger.error({ err: appError, requestId: request.id }, "Request failed");
+  else logger.warn({ err: appError, requestId: request.id }, "Request rejected");
+
+  reply.status(statusCode).send(body);
 }
 
 // ── Pattern 2: AWS Lambda API Gateway Handler ─────────────────────────────────
@@ -49,25 +37,11 @@ export async function lambdaHandler(event: { pathParameters?: { id?: string } })
       body: JSON.stringify({ success: true, data: { id } }),
     };
   } catch (err) {
-    if (err instanceof AppError) {
-      return {
-        statusCode: err.statusCode,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(err.toJSON()),
-      };
-    }
-
+    const { statusCode, body } = toHttpResponse(err);
     return {
-      statusCode: 500,
+      statusCode,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        success: false,
-        error: {
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Internal server error",
-          details: null,
-        },
-      }),
+      body: JSON.stringify(body),
     };
   }
 }
