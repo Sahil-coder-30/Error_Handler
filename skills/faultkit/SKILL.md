@@ -389,4 +389,4 @@ api.interceptors.response.use(
 FaultKit includes a safe, zero-dependency CLI. Run with `--help` first:
 - `npx faultkit init --help` — Configure AI agent skills (.agents, Cursor, Copilot, Claude).
 - `npx faultkit info` — Inspect OpenAPI contract and exported subpaths.
-- `npx faultkit --version` — Print installed version (v1.2.0).
+- `npx faultkit --version` — Print installed version (v1.2.1).
