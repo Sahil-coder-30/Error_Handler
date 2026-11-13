@@ -1,10 +1,12 @@
 <div align="center">
 
+<img src="https://raw.githubusercontent.com/Sahil-coder-30/faultkit/main/assets/logo.svg" alt="faultkit logo" width="128" height="128">
+
 # faultkit
 
 **Typed errors, one JSON error contract, and safe structured logging for Node.js and TypeScript.**
 
-[![CI](https://github.com/Sahil-coder-30/Error_Handler/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Sahil-coder-30/Error_Handler/actions/workflows/ci.yml)
+[![CI](https://github.com/Sahil-coder-30/faultkit/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Sahil-coder-30/faultkit/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/faultkit.svg)](https://www.npmjs.com/package/faultkit)
 [![npm downloads](https://img.shields.io/npm/dm/faultkit.svg)](https://www.npmjs.com/package/faultkit)
 [![types](https://img.shields.io/npm/types/faultkit.svg)](https://www.npmjs.com/package/faultkit)
@@ -479,7 +481,7 @@ Existing files are never overwritten without `--force`. In shared files such as 
 
 ## Contributing
 
-Issues and pull requests are welcome at [github.com/Sahil-coder-30/Error_Handler](https://github.com/Sahil-coder-30/Error_Handler).
+Issues and pull requests are welcome. Read the [contributing guide](CONTRIBUTING.md) and the [code of conduct](CODE_OF_CONDUCT.md) first. To report a security issue, follow the [security policy](SECURITY.md).
 
 ```bash
 npm ci
@@ -491,7 +493,7 @@ npm run test:adversarial  # hostile-input and fuzz suites
 npm run test:stress       # load and concurrency suites
 ```
 
-Release notes are published on [GitHub Releases](https://github.com/Sahil-coder-30/Error_Handler/releases). The project follows semantic versioning: breaking changes to the response contract or class signatures bump the major version.
+Release notes are in the [changelog](CHANGELOG.md) and on [GitHub Releases](https://github.com/Sahil-coder-30/faultkit/releases). The project follows semantic versioning: breaking changes to the response contract or class signatures bump the major version.
 
 ## License
 

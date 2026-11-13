@@ -6,12 +6,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Sahil-coder-30/Error_Handler.git"
+    "url": "git+https://github.com/Sahil-coder-30/faultkit.git"
   },
   "bugs": {
-    "url": "https://github.com/Sahil-coder-30/Error_Handler/issues"
+    "url": "https://github.com/Sahil-coder-30/faultkit/issues"
   },
-  "homepage": "https://github.com/Sahil-coder-30/Error_Handler#readme",
+  "homepage": "https://github.com/Sahil-coder-30/faultkit#readme",
   "keywords": [
     "faultkit",
     "fault-tolerance",
@@ -36,7 +36,8 @@
     "dist",
     "bin",
     "skills",
-    "examples"
+    "examples",
+    "CHANGELOG.md"
   ],
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",
